@@ -1,0 +1,2 @@
+# Zoomboard RTMP Server
+This builds the executable to create an RTMP stream to be used by the server for the zoomboard project. It opens the default camera (or a file if one is provided), displays it on a window to allow the user to choose the four corners to be rectified, applies a perspective transform to rectify the image and then creates an RTMP stream to serve.

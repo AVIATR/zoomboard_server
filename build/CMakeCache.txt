@@ -318,6 +318,8 @@ rtmp_server_SOURCE_DIR:STATIC=/Users/endertekin/Projects/zoomboard/rtmp_server
 # INTERNAL cache entries
 ########################
 
+//Stored Xcode object GUID
+ALL_BUILD_GUID_CMAKE:INTERNAL=CC5FF5F5800A4C83928C97EA
 //ADVANCED property for variable: CMAKE_AR
 CMAKE_AR-ADVANCED:INTERNAL=1
 //This is the directory where this CMakeCache.txt was created
@@ -703,11 +705,19 @@ PC_LIBSWSCALE_libswscale_PREFIX:INTERNAL=
 PC_LIBSWSCALE_libswscale_VERSION:INTERNAL=
 //ADVANCED property for variable: PKG_CONFIG_EXECUTABLE
 PKG_CONFIG_EXECUTABLE-ADVANCED:INTERNAL=1
+//Stored Xcode object GUID
+PROJECT_rtmp_server_GUID_CMAKE:INTERNAL=25B0F2467C57416FB8F3C803
+//Stored Xcode object GUID
+ZERO_CHECK_GUID_CMAKE:INTERNAL=0075DC3E294B4E608C33AD1C
 __pkg_config_checked_PC_LIBAVCODEC:INTERNAL=1
 __pkg_config_checked_PC_LIBAVFILTER:INTERNAL=1
 __pkg_config_checked_PC_LIBAVFORMAT:INTERNAL=1
 __pkg_config_checked_PC_LIBAVUTIL:INTERNAL=1
 __pkg_config_checked_PC_LIBSWRESAMPLE:INTERNAL=1
 __pkg_config_checked_PC_LIBSWSCALE:INTERNAL=1
+//Stored Xcode object GUID
+install_GUID_CMAKE:INTERNAL=53315010618D442EA1809543
+//Stored Xcode object GUID
+package_GUID_CMAKE:INTERNAL=1F3EC812B07F4422A80F90F3
 prefix_result:INTERNAL=/usr/local/Cellar/ffmpeg/4.1_1/lib
 

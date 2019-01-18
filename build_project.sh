@@ -1,8 +1,10 @@
 #!/bin/bash
+export PROJ_NAME="rtmp_server"
 function usage {
-    echo "Usage: $0 [-x|--xcode] [-h|--help] [build_dir]"
+    echo "Usage: $0 [-x|--xcode] [-h|--help] [-b|--build] [build_dir]"
     echo " -x               Create xcode project. By default, a make project is created."
     echo " -h               This help message."
+    echo " -b               Builds the project binaries after the project is built"
     echo " build_dir        Name of folder to put the build files in. Default is 'build'."
 }
 
@@ -24,6 +26,11 @@ case $key in
     -x|--xcode)
         IS_XCODE=yes
         ARGS+=(-G Xcode)
+        shift #past switch
+        ;;
+    -b|--build)
+        ARGS+=(--build)
+        echo "Project binaries will be built."
         shift #past switch
         ;;
     *)    # unknown option
@@ -53,4 +60,4 @@ if [ "${IS_XCODE}" = yes ]; then
 else
     echo "Building make project in ${TARGET_DIR}"
 fi
-cmake "${ARGS[@]}" 
+cmake "${ARGS[@]}"

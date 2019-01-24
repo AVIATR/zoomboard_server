@@ -27,35 +27,22 @@ extern "C" {
 using avtools::StreamError;
 namespace
 {
-    /// Creates output codec parameters for the transcoder
-    /// @param[in] inParam input codec parameters
-    /// @return handle to output codec parameters
-    avtools::CodecParametersHandle getOutputAudioCodecParameters(const AVCodecParameters& inParam);
-    
-    /// @class Converts audio from one format to another
-    class AudioTranscoder
+    /// @class A structure containing the pertinent ffmpeg options
+    struct Options
     {
-    private:
-        avtools::CodecParametersHandle      hInCodecPar_;       ///< input codec context
-        avtools::CodecParametersHandle      hOutCodecPar_;      ///< output codeec context
-        avtools::ResamplingContextHandle    hResamplingCtx_;    ///< Resampling context
-        avtools::FrameHandle                hOutFrame_;         ///< output frame
-        avtools::TimeType                   timeStamp_;         ///< time stamp
-        int                                 minBufferSize_;     ///< minimum buffer size
-    public:
-        
-        /// Ctor
-        /// @param[in] inCodecCtx input codec context
-        /// @param[in] outCodecCtx output codec context
-        AudioTranscoder(const AVCodecParameters& inCodecPar, const AVCodecParameters& outCodecPar);
-        
-        ///Dtor
-        ~AudioTranscoder();
-        
-        void push(const AVFrame* pFrame);
-        
-        const AVFrame* pop();
-    }; //<anon>::AudioTranscoder
+        std::string inputDevice;            ///< Name of input device, e.g., v4l2 for linux, avfoundation for macos etc.
+        std::string inputSource;            ///< Input source to use, e.g., /dev/video0 for linux, 0 for macos etc.
+        std::string url;                    ///< Url to publish the output stream
+        avtools::TimeBaseType frameRate;    ///< Frame rate to use.
+        cv::Size    resolution;             ///< Resolution of the input
+    };
+    
+    /// Parses a json file to retrieve the configuration to use
+    /// @param[in] configFile name of configuration file to read
+    /// @return a structure containing the ffmpeg options to use
+    /// @throw std::runtime_error if there is an issue parsing the configuration file.
+    Options getOptions(const std::string& configFile);
+    
 } //::<anon>
 
 int main(int argc, const char * argv[])
@@ -68,7 +55,8 @@ int main(int argc, const char * argv[])
     }
     try
     {
-        const std::string infile = argv[1], outfile = argv[2];
+        const std::string configFile = argv[1];
+        const Options opts = getOptions(configFile);
         // Open the media reader
         avtools::MultiMediaReader mmReader(infile);
         
@@ -170,149 +158,5 @@ int main(int argc, const char * argv[])
 
 namespace
 {
-    
-    // Constants
-    static const int OUTPUT_SAMPLING_RATE                           = 8000;                         ///< Output sampling rate
-    static const avtools::ChannelLayoutType OUTPUT_CHANNEL_LAYOUT   = AV_CH_LAYOUT_MONO;            ///< Output channel layout - mono
-    static const AVSampleFormat OUTPUT_SAMPLE_FORMAT                = AV_SAMPLE_FMT_FLTP;           ///< Output sample format - planar floats
-    static const int OUTPUT_BIT_RATE                                = 32000;
-
-    avtools::CodecParametersHandle getOutputAudioCodecParameters(const AVCodecParameters& inParam)
-    {
-        avtools::CodecParametersHandle hOutParam = avtools::allocateCodecParameters();
-        if ( !hOutParam )
-        {
-            throw MMError("Unable to allocate output audio codec parameters");
-        }
-        int ret = avcodec_parameters_copy(hOutParam.get(), &inParam);
-        if (ret < 0)
-        {
-            throw MMError("Unable to copy audio codec parameters", ret);
-        }
-        const AVCodec* pEncoder = avcodec_find_encoder(inParam.codec_id);
-        if (!pEncoder)
-        {
-            throw MMError("Unable to find an encoder for ", inParam.codec_id);
-        }
-        // Set the output to mono
-        if (avtools::checkChannelLayout(pEncoder, OUTPUT_CHANNEL_LAYOUT) < 0)
-        {
-            throw MMError("Requested channel layout is not supported by encoder.");
-        }
-        hOutParam->channel_layout = OUTPUT_CHANNEL_LAYOUT;
-
-        //pOutCodecCtx->sample_fmt = av_get_planar_sample_fmt(pInCodecCtx->sample_fmt) ;
-        if (avtools::checkSampleRate(pEncoder, OUTPUT_SAMPLING_RATE) < 0)
-        {
-            throw MMError("Requested sampling rate is not supported by encoder.");
-        }
-        hOutParam->sample_rate = OUTPUT_SAMPLING_RATE;
-        
-        if (avtools::checkSampleFormat(pEncoder, OUTPUT_SAMPLE_FORMAT) < 0)
-        {
-            throw MMError("Requested sample format is not supported by encoder.");
-        }
-        hOutParam->format = OUTPUT_SAMPLE_FORMAT;
-        
-        hOutParam->bit_rate = OUTPUT_BIT_RATE;
-        return hOutParam;
-    }
-    
-    /// @class error thrown by the audio transcoder
-    struct TranscoderError: public std::runtime_error
-    {
-        inline TranscoderError(const std::string& msg):
-        std::runtime_error("AudioTranscoder Error: " + msg)
-        {}
-        
-        inline TranscoderError(const std::string& msg, int err):
-        TranscoderError(msg + ". AV_ERR: " + av_err2str(err))
-        {}
-        
-        inline virtual ~TranscoderError() = default;
-    };  //Transcoder error
-    
-    AudioTranscoder::AudioTranscoder(const AVCodecParameters& inParam, const AVCodecParameters& outParam):
-    hInCodecPar_( avtools::cloneCodecParameters(inParam) ),
-    hOutCodecPar_( avtools::cloneCodecParameters(outParam) ),
-    hResamplingCtx_( avtools::allocateResamplingContext(inParam, outParam) ),
-    hOutFrame_( avtools::allocateFrame(*hOutCodecPar_) ),
-    timeStamp_(0L),
-    minBufferSize_(outParam.frame_size + 50)
-    {
-        if ( !hInCodecPar_ )
-        {
-            throw TranscoderError("Unable to clone input audio codec parameters");
-        }
-        if ( !hOutCodecPar_ )
-        {
-            throw TranscoderError("Unable to initialize output audio codec parameters");
-        }
-        if ( hOutCodecPar_->channels > AV_NUM_DATA_POINTERS )
-        {
-            throw TranscoderError("Can currently only handle a maximum of " + std::to_string(AV_NUM_DATA_POINTERS) + " channels");
-        }
-        if ( !hResamplingCtx_ )
-        {
-            throw TranscoderError("Unable to allocate audio resampling context.");
-        }
-        
-        assert(hOutFrame_);  //otherwise hOutFrame_ should have thrown
-    }
-    
-    AudioTranscoder::~AudioTranscoder()
-    {
-        assert(hResamplingCtx_);
-        std::int64_t n = 0;
-        if ( (n = swr_get_delay(hResamplingCtx_.get(), 1000) ) )
-        {
-            LOGW("AudioTranscoder: closing, but there are ", n, "ms of output left in the resampling context.");
-        }
-    }
-    
-    void AudioTranscoder::push(const AVFrame* pFrame)
-    {
-        // Push input data to resampling buffer. Don't retrieve any data yet, as a full frame may not be available
-        assert(hResamplingCtx_);
-        assert(minBufferSize_ > 0); //this is set to zero upon null frame, shouldn't be pushing anything again afterwards
-        int ret = swr_convert_frame(hResamplingCtx_.get(), nullptr, pFrame);
-        if (ret < 0)
-        {
-            throw TranscoderError("Error converting audio to output format.", ret);
-        }
-        if (!pFrame)
-        {
-            minBufferSize_ = 0; //eof, flush remaining data in consecutive pops without waiting for full frame
-        }
-    }
-    
-    const AVFrame* AudioTranscoder::pop()
-    {
-        assert(hResamplingCtx_);
-        int ret = swr_get_out_samples(hResamplingCtx_.get(), 0);
-        if (ret < 0)
-        {
-            throw TranscoderError("Cannot determine number of buffered samples.");
-        }
-        else if (ret < minBufferSize_)
-        {
-            return nullptr; //no error just insufficient data for a full frame
-        }
-        hOutFrame_->nb_samples = hOutCodecPar_->frame_size;
-        ret = swr_convert_frame(hResamplingCtx_.get(), hOutFrame_.get(), nullptr);
-        if (ret < 0)
-        {
-            throw TranscoderError("Error converting audio to output format.", ret);
-        }
-        assert(hOutFrame_->nb_samples <= hOutCodecPar_->frame_size);
-        if (0 == hOutFrame_->nb_samples)
-        {
-            assert(swr_get_out_samples(hResamplingCtx_.get(), 0) == 0);
-            return nullptr;  //no data left
-        }
-        hOutFrame_->pts = timeStamp_;
-        timeStamp_ += hOutFrame_->nb_samples;
-        return hOutFrame_.get();
-    }
 
 }   //::<anon>

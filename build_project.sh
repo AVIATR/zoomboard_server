@@ -44,7 +44,7 @@ ARGS+=(-S $(pwd) -B "${TARGET_DIR}")
 echo CMAKE ARGS = "${ARGS[@]}"
 
 if [[ -e "${TARGET_DIR}" ]]; then
-    read -p "${TARGET_DIR} exists, and will be removed. Are you sure? " CHOICE
+    read -p "${TARGET_DIR} exists, and will be removed. Are you sure (y/n)? " CHOICE
     echo    # (optional) move to a new line
     if [[ $CHOICE =~ ^[Yy]$ ]]; then
         rm -rf "${TARGET_DIR}"

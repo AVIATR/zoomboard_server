@@ -17,6 +17,56 @@ set(CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/cmake_modules" ${CMAKE_MODULE_PATH})
 set( CMAKE_VERBOSE_MAKEFILE on )	#uncomment for make script debugging purposes
 message(STATUS "Module path set to: ${CMAKE_MODULE_PATH}")
 
+# Enable debug symbols by default (you can also set it on the command line: -D CMAKE_BUILD_TYPE=Release)
+if(NOT DEFINED CMAKE_BUILD_TYPE)
+    set(CMAKE_BUILD_TYPE "Debug")
+elseif (CMAKE_BUILD_TYPE STREQUAL "")
+    set(CMAKE_BUILD_TYPE "Debug")
+endif()
+cmake_minimum_required(VERSION 3.5)
+
+set(CMAKE_LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/${CMAKE_BUILD_TYPE}")
+set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/${CMAKE_BUILD_TYPE}")
+list(APPEND CMAKE_LIBRARY_PATH ${CMAKE_LIBRARY_OUTPUT_DIRECTORY})
+
+set(CMAKE_CXX_STANDARD 14)
+
+message(STATUS "Build type = ${CMAKE_BUILD_TYPE}")
+if(CMAKE_BUILD_TYPE STREQUAL "Debug")
+    message(STATUS "Compile options = ${CMAKE_CXX_FLAGS_DEBUG}")
+elseif(CMAKE_BUILD_TYPE STREQUAL "Release")
+    message(STATUS "Compile options = ${CMAKE_CXX_FLAGS_RELEASE}")
+else()
+    message(FATAL_ERROR "Unknown build type")
+endif()
+
+###################################
+# Detect and add external libraries
+###################################
+# Find ffmpeg
+find_package(FFMPEG REQUIRED)
+if (FFMPEG_FOUND)
+    message(STATUS "FFMPEG Found")
+    message(STATUS "FFMPEG_LIBRARIES = ${FFMPEG_LIBRARIES}")
+    message(STATUS "FFMPEG_INCLUDE_DIRS = ${FFMPEG_INCLUDE_DIRS}")
+endif()
+
+# Find OpenCV
+find_package(OpenCV REQUIRED)
+if (OpenCV_FOUND)
+    message(STATUS "OpenCV Found")
+    message(STATUS "OpenCV_LIBRARIES = ${OpenCV_LIBRARIES}")
+    message(STATUS "OpenCV_INCLUDE_DIRS = ${OpenCV_INCLUDE_DIRS}")
+endif()
+
+###################################
+# Configure files
+###################################
+message("\nProject = ${PROJECT_NAME}")
+message(STATUS "Build type = ${CMAKE_BUILD_TYPE}")
+message(STATUS "SOURCE DIR = ${PROJECT_SOURCE_DIR}")
+message(STATUS "BINARY DIR = ${PROJECT_BINARY_DIR}")
+
 #Add source folder
 add_subdirectory("src")
 

@@ -1,0 +1,4 @@
+{
+    "device": "v4l2",
+    "source": "/dev/video0"
+}

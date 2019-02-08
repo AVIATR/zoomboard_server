@@ -1,4 +1,7 @@
 {
-    "device": "avfoundation",
-    "source": ""
+    "driver": "avfoundation",
+    "device": "",
+    "url": "localhost",
+    "fps": 5,
+    "resolution": "720p"
 }

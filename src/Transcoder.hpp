@@ -29,18 +29,12 @@ namespace avtools
         ///Dtor
         ~Transcoder();
         
-        /// Pushes a video frame to be transcoded. After pushing, use pop() to see if
-        /// there are transcoded frames available.
-        /// There may be buffered frames. Push nullptr to return these with pop().
+        /// Transcodes a video frame.
         /// @param[in] pFrame input frame
+        /// @return transcoded frame
         /// @throw StreamError if there are issues with transcoding
-        void push(const AVFrame* pFrame);
+        const AVFrame* convert(const AVFrame* pFrame);
         
-        /// Pops a video frame from the transcoder if one is available.
-        /// If no frames are yet available, returns nullptr
-        /// @return pointer to transcoded video frame
-        /// @throw StreamError if there are issues with transcoding.
-        const AVFrame* pop();
     private:
         class Implementation;                           ///< Implementation class
         std::unique_ptr<Implementation> pImpl_;         ///< Ptr to implementation

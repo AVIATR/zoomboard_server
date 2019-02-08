@@ -12,128 +12,7 @@
 
 namespace
 {
-    /// returns a string of info re: audio codec
-    /// @param[in] codecPar audio codec parameters
-    /// Taken from http://www.gamedev.net/topic/624876-how-to-read-an-audio-file-with-ffmpeg-in-c/
-    std::string getAudioCodecInfo(const AVCodecParameters& codecPar, int indent=0)
-    {
-        assert(codecPar.codec_type == AVMEDIA_TYPE_AUDIO);
-        const std::string filler(indent, '\t');
-        std::stringstream ss;
-        // See the following to know what data type (unsigned char, short, float, etc) to use to access the audio data:
-        // http://ffmpeg.org/doxygen/trunk/samplefmt_8h.html#af9a51ca15301871723577c730b5865c5
-        
-        ss << filler << "Audio codec info:" << std::endl;
-        const AVSampleFormat fmt = (AVSampleFormat) codecPar.format;
-        ss << filler << "\tFormat: " << fmt << std::endl;
-        ss << filler << "\t\tPlanar: " << (bool) av_sample_fmt_is_planar(fmt);
-        ss << filler << "\t\tBytes per sample: " << av_get_bytes_per_sample(fmt) << std::endl;
-        ss << filler << "\tSampling Rate: " << codecPar.sample_rate << std::endl;
-        ss << filler << "\tChannel count: " << codecPar.channels << std::endl;
-//        char buf[64];
-//        av_get_channel_layout_string(buf, 64, codecContext->channels, codecContext->channel_layout);
-        ss << filler << "\tChannel layout: " << avtools::av_get_channel_layout_name(codecPar.channel_layout) << std::endl;
-        //frame->linesize[0] tells you the size (in bytes) of each plane
-        
-//        if (codecContext->channels > AV_NUM_DATA_POINTERS && av_sample_fmt_is_planar(codecContext->sample_fmt))
-//        {
-//            //LOGE("The audio stream (and its frames) have too many channels to fit in frame->data.");
-//            //Therefore, to access the audio data, you need to use frame->extended_data to access the audio data. It's planar, so each channel is in a different element. That is:
-//            //frame->extended_data[0] has the data for channel 1
-//            //frame->extended_data[1] has the data for channel 2, etc.
-//        }
-        //otherwise you can either use frame->data or frame->extended_data to access the audio data (they should just point to the same data).
-        
-        //If the frame is planar, each channel is in a different element, i.e.,
-        //frame->data[0]/frame->extended_data[0] has the data for channel 1
-        //frame->data[1]/frame->extended_data[1] has the data for channel 2, etc.
-        //
-        //If the frame is packed (not planar), then all the data is in
-        //frame->data[0]/frame->extended_data[0] (kind of like how some
-        //image formats have RGB pixels packed together, rather than storing
-        //the red, green, and blue channels separately in different arrays.
-        
-        return ss.str();
-    }
-    
-    /// Prints info re: video codec
-    /// @param[in] codecPar video codec parameters
-    std::string getVideoCodecInfo(const AVCodecParameters& codecPar, int indent=0)
-    {
-        assert(codecPar.codec_type == AVMEDIA_TYPE_VIDEO);
-        const std::string filler(indent, '\t');
-        std::stringstream ss;
-        ss << filler << "Video codec info:" << std::endl;
-        ss << filler << "\tCodec ID: " << codecPar.codec_id << std::endl;
-        ss << filler << "\tFormat: " << (AVPixelFormat) codecPar.format << std::endl;
-        ss << filler << "\tSize (wxh): " << codecPar.width << "x" << codecPar.height << std::endl;
-        ss << filler << "\tPixel Aspect Ratio: " << codecPar.sample_aspect_ratio;
-        return ss.str();
-    }
-    
-    /// Prints info re: audio frames
-    /// Taken from http://www.gamedev.net/topic/624876-how-to-read-an-audio-file-with-ffmpeg-in-c/
-    /// @param[in] pFrame audio frame. This function does not check that this is an audio frame, and may cause problems if the frame does not actually contain audio data.
-    /// @param[in] indent number of tabs to indent by
-    /// @return a string containing info re: an audio frame
-    /// Prints info re: an audio frame
-    std::string getAudioFrameInfo(const AVFrame* pFrame, int indent)
-    {
-        assert(pFrame);
-        const std::string filler(indent, '\t');
-        std::stringstream ss;
-        ss << filler << "Sample count:" << pFrame->nb_samples << std::endl;
-        AVSampleFormat format = (AVSampleFormat) pFrame->format;
-        ss << filler << "Sample format: " << format << std::endl;
-        ss << filler << "Bytes/sample: " << av_get_bytes_per_sample(format) << std::endl;
-        ss << filler << "Plane size (in bytes): " << pFrame->linesize[0] << std::endl;
-        ss << filler << "#Channels: " << pFrame->channels << std::endl;
-        //LOGD("\t#Channel layout: ",  av_get_channel_description(av_frame_get_channel_layout(pFrame)));
-//        static const int BUFLEN = 32;
-//        char charbuf[BUFLEN];
-//        av_get_channel_layout_string(charbuf, BUFLEN, pFrame->channels, pFrame->channel_layout);
-        ss << filler << "Channel layout: " << avtools::av_get_channel_layout_name(pFrame->channel_layout) << std::endl;;
-        return ss.str();
-        
-        //        int linesizeNeeded = 0;
-        //        int ret = av_samples_get_buffer_size(&linesizeNeeded, pFrame->channels, pFrame->nb_samples, (AVSampleFormat) pFrame->format, 0);
-        //        if (ret < 0)
-        //        {
-        //            LOGE("Error calculating linesize: ", av_err2str(ret));
-        //        }
-        //        else
-        //        {
-        //            LOGV("Required buffer size / linesize = ", ret, " / ", linesizeNeeded);
-        //        }
-        //
-        //        LOGV("\tPacket size / duration / position:", av_frame_get_pkt_size(pFrame), ", ",av_frame_get_pkt_duration(pFrame), ", ",av_frame_get_pkt_pos(pFrame));
-        
-        /*
-         //frame->linesize[0] tells you the size (in bytes) of each plane
-         
-         if (codecContext->channels > AV_NUM_DATA_POINTERS && av_sample_fmt_is_planar(codecContext->sample_fmt))
-         {
-         LOGE("The audio stream (and its frames) have too many channels to fit in frame->data.");
-         throw std::runtime_error("Handling this many channels not yet implemented");
-         //Therefore, to access the audio data, you need to use frame->extended_data to access the audio data. It's planar, so each channel is in a different element. That is:
-         //frame->extended_data[0] has the data for channel 1
-         //frame->extended_data[1] has the data for channel 2, etc.
-         }
-         else
-         {
-         LOGV("Either the audio data is not planar, or there is enough room in frame->data to store all the channels");
-         //so you can either use frame->data or frame->extended_data to access the audio data (they should just point to the same data).
-         }
-         //If the frame is planar, each channel is in a different element, i.e.,
-         //frame->data[0]/frame->extended_data[0] has the data for channel 1
-         //frame->data[1]/frame->extended_data[1] has the data for channel 2, etc.
-         //
-         //If the frame is packed (not planar), then all the data is in
-         //frame->data[0]/frame->extended_data[0] (kind of like how some
-         //image formats have RGB pixels packed together, rather than storing
-         //the red, green, and blue channels separately in different arrays.
-         */
-    }
+
     
     /// Prints info re: a video frame
     /// @param[in] pFrame a video frame. If the frame is not a video frame, the results will be inaccurate
@@ -147,7 +26,7 @@ namespace
         ss << filler << "Picture Format: " << (AVPixelFormat) pFrame->format << std::endl;;
         ss << filler << "Size (w x h): " << pFrame->width << "x" << pFrame->height << std::endl;
         ss << filler << "Aspect Ratio: " << pFrame->sample_aspect_ratio.num << "/" <<pFrame->sample_aspect_ratio.den << std::endl;
-        ss << filler << "Colorspace: " << av_frame_get_colorspace(pFrame) << std::endl;
+        ss << filler << "Colorspace: " << pFrame->colorspace << std::endl;
         ss << filler << "Picture Type:" << pFrame->pict_type << std::endl;
         return ss.str();
     };
@@ -198,12 +77,12 @@ namespace avtools
         auto h = allocateCodecParameters();
         if (!h)
         {
-            throw MMError("Unable to allocate codec parameters");
+            throw StreamError("Unable to allocate codec parameters");
         }
         int ret = avcodec_parameters_copy(h.get(), &pF);
         if ( ret < 0 )
         {
-            throw MMError("Unable to clone codec parameters", ret);
+            throw StreamError("Unable to clone codec parameters", ret);
         }
         return h;
     }
@@ -211,17 +90,21 @@ namespace avtools
 
     std::string getCodecInfo(const AVCodecParameters& codecPar, int indent)
     {
-        switch (codecPar.codec_type)
+        if (codecPar.codec_type == AVMEDIA_TYPE_VIDEO)
         {
-            case AVMEDIA_TYPE_VIDEO:
-                return getVideoCodecInfo(codecPar, indent);
-                break;
-            case AVMEDIA_TYPE_AUDIO:
-                return getAudioCodecInfo(codecPar, indent);
-                break;
-            default:
-                const auto c = av_get_media_type_string(codecPar.codec_type);
-                return std::string('\t', indent) + (c ? "Info re: " + std::string(c) + "codecs not available." : "Unknown codec type.");
+            assert(codecPar.codec_type == AVMEDIA_TYPE_VIDEO);
+            const std::string filler(indent, '\t');
+            std::stringstream ss;
+            ss << filler << "Video codec info:" << std::endl;
+            ss << filler << "\tCodec ID: " << codecPar.codec_id << std::endl;
+            ss << filler << "\tFormat: " << (AVPixelFormat) codecPar.format << std::endl;
+            ss << filler << "\tSize (wxh): " << codecPar.width << "x" << codecPar.height << std::endl;
+            ss << filler << "\tPixel Aspect Ratio: " << codecPar.sample_aspect_ratio;
+            return ss.str();
+        }
+        else
+        {
+            throw std::invalid_argument("Info re: " + std::to_string(codecPar.codec_type) + " codecs is not available.");
         }
     }
 
@@ -232,7 +115,7 @@ namespace avtools
         int ret = avcodec_parameters_from_context(codecPar.get(), pCC);
         if (ret < 0)
         {
-            throw MMError("Unable to determine codec parameters from codec context", ret);
+            throw StreamError("Unable to determine codec parameters from codec context", ret);
         }
         return getCodecInfo(*codecPar, indent);
     }
@@ -263,37 +146,110 @@ namespace avtools
         const std::string filler(indent, '\t');
         std::stringstream ss;
         const AVMediaType type = pStr->codecpar->codec_type;
+        ss << filler << "\tType: " << type << std::endl;
         ss << filler << "\tSource: " << getBriefStreamInfo(pStr) << std::endl;
-        const std::int64_t pts = av_frame_get_best_effort_timestamp(pFrame);
-        ss << filler << "\tpts: " << pts << "\t[" << calculateTime(pts, pStr->time_base) << " s]" << std::endl;
-        switch(type)
+        const std::int64_t pts = pFrame->best_effort_timestamp;
+        ss << filler << "\tPTS: " << pts << "\t[" << calculateTime(pts, pStr->time_base) << " s]" << std::endl;
+        if (type == AVMEDIA_TYPE_VIDEO)
         {
-            case AVMEDIA_TYPE_AUDIO:
-                ss << getAudioFrameInfo(pFrame, indent+1);
-                break;
-            case AVMEDIA_TYPE_VIDEO:
-                ss << getVideoFrameInfo(pFrame, indent+1);
-                break;
-            default:
-                ss << filler << "No further info available for this frame type.";
-                break;
+            ss << filler << "\tPicture Format: " << (AVPixelFormat) pFrame->format << std::endl;;
+            ss << filler << "\tSize (w x h): " << pFrame->width << "x" << pFrame->height << std::endl;
+            ss << filler << "\tAspect Ratio: " << pFrame->sample_aspect_ratio.num << "/" <<pFrame->sample_aspect_ratio.den << std::endl;
+            ss << filler << "\tColorspace: " << pFrame->colorspace << std::endl;
+            ss << filler << "\tPicture Type:" << pFrame->pict_type << std::endl;
+            return ss.str();
+        }
+        else
+        {
+            ss << filler << "No further info is available" << std::endl;
         }
         return ss.str();
     }
     
+    FrameHandle allocateVideoFrame(int width, int height, AVPixelFormat format, AVColorSpace cs/*=AVColorSpace::AVCOL_SPC_RGB*/)
+    {
+        //allocate frame structure
+        auto hFrameOut = avtools::allocateFrame();
+        if ( !hFrameOut )
+        {
+            throw StreamError("Unable to allocate video frame");
+        }
+        //set metadata
+        hFrameOut->colorspace = cs;
+        hFrameOut->width = width;
+        hFrameOut->height = height;
+        hFrameOut->format = format;
+        //set buffers
+        //        int ret = av_image_alloc(pFrameOut->data, pFrameOut->linesize, width, height, format, ALIGNMENT);
+        int ret = av_frame_get_buffer(hFrameOut.get(), 0);
+        if (ret < 0)
+        {
+            throw StreamError("Error allocating data buffers for video frame", ret);
+        }
+        LOGD("Allocated frame data at ", static_cast<void*>(hFrameOut->data), " with linesize = ", hFrameOut->linesize[0]);
+        return hFrameOut;
+    }
+    
     FrameHandle allocateFrame(const AVCodecParameters& cPar)
     {
-        switch(cPar.codec_type)
+        assert(cPar.codec_type == AVMEDIA_TYPE_VIDEO);
+        return allocateVideoFrame(cPar.width, cPar.height, (AVPixelFormat) cPar.format, cPar.color_space);
+    }
+
+    //
+    // Dictionary wrapper
+    //
+    void Dict::add(const std::string& key, const std::string& value)
+    {
+        int ret = av_dict_set(&pDict_, key.c_str(), value.c_str(), 0);
+        if (ret < 0)
         {
-            case AVMEDIA_TYPE_AUDIO:
-                assert( cPar.channels == av_get_channel_layout_nb_channels(cPar.channel_layout) );
-                return allocateAudioFrame(cPar.frame_size, (AVSampleFormat) cPar.format, cPar.sample_rate, cPar.channel_layout);
-            case AVMEDIA_TYPE_VIDEO:
-                return allocateVideoFrame(cPar.width, cPar.height, (AVPixelFormat) cPar.format, cPar.color_space);
-            default:
-                throw std::domain_error("allocateFrame currently does not handle non-audio-visual codecs");
+            throw StreamError("Unable to add key " + key + " to dictionary", ret);
         }
     }
+    
+    void Dict::add(const std::string& key, std::int64_t value)
+    {
+        int ret = av_dict_set_int(&pDict_, key.c_str(), value, 0);
+        if (ret < 0)
+        {
+            throw StreamError("Unable to add key " + key + " to dictionary", ret);
+        }
+    }
+    
+    std::string Dict::at(const std::string& key) const
+    {
+        AVDictionaryEntry *pEntry = av_dict_get(pDict_, key.c_str(), nullptr, 0);
+        if (!pEntry)
+        {
+            throw std::out_of_range("Key " + key + " not found in dictionary.");
+        }
+        return pEntry->value;
+    }
+    
+    std::string Dict::operator[](const std::string& key) const
+    {
+        return at(key);
+    }
+    
+    /// Clones a dictionary. Any entries in this dictionary are lost.
+    /// @param[in] dict source dictionary
+    Dict& Dict::operator=(const Dict& dict)
+    {
+        if (pDict_)
+        {
+            av_dict_free(&pDict_);
+            pDict_ = nullptr;
+        }
+        int ret = av_dict_copy(&pDict_, dict.get(), 0);
+        if (ret < 0)
+        {
+            throw StreamError("Unable to clone dictionary.");
+        }
+        return *this;
+    }
+
+
 
 }   //::avtools
 

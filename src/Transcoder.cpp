@@ -16,14 +16,21 @@ extern "C" {
 #include <libavcodec/avcodec.h>
 #include <libavutil/pixdesc.h>
 #include <libavutil/frame.h>
+#include <libswscale/swscale.h>
 }
 
 namespace
 {
-    typedef avtools::Handle<SwsConversionContext> ConversionContextHandle;
+    typedef avtools::Handle<SwsContext> ConversionContextHandle;
     ConversionContextHandle allocateConversionContext(const AVCodecParameters& inParam, const AVCodecParameters& outParam)
     {
-        LOGX;
+        return ConversionContextHandle
+        (
+         sws_getContext(inParam.width, inParam.height, (AVPixelFormat) inParam.format,
+                        outParam.width, outParam.height, (AVPixelFormat) outParam.format,
+                        0, nullptr, nullptr, nullptr),  //flags = 0, srcfilter=dstfilter=nullptr, param=nullptr
+         [](SwsContext* p){sws_freeContext(p);}
+        );
     }
 }   //::<anon>
 
@@ -42,13 +49,13 @@ namespace avtools
         CodecParametersHandle   hInParam_;      ///< Input codec parameters
         CodecParametersHandle   hOutParam_;     ///< Output codec parameters
         ConversionContextHandle hConvCtx_;      ///< Conversion context handle
-        FrameHandle             hFrame_;        ///< Handle to frame holding transcoded frame data
+        FrameHandle             hFrameOut_;     ///< Handle to frame holding transcoded frame data
     public:
         Implementation(const AVCodecParameters& inParam, const AVCodecParameters& outParam):
             hInParam_( cloneCodecParameters(inParam) ),
             hOutParam_( cloneCodecParameters(outParam) ),
             hConvCtx_( allocateConversionContext(inParam, outParam) ),
-            hFrame_( allocateFrame(outParam) )
+            hFrameOut_( allocateFrame(outParam) )
         {
             if ( !hInParam_ || !hOutParam_)
             {
@@ -58,58 +65,34 @@ namespace avtools
             {
                 throw StreamError("Unable to allocate conversion context");
             }
-            if ( !hFrame_ )
+            if ( !hFrameOut_ )
             {
                 throw StreamError("Unable to allocate frame");
             }
+            assert ((hFrameOut_->width == outParam.width) && (hFrameOut_->height == outParam.height));
+            assert (hFrameOut_->format == outParam.format);
+            if (0 == sws_isSupportedInput((AVPixelFormat) inParam.format))
+            {
+                throw StreamError("Unsupported input pixel format " + std::to_string(inParam.format));
+            }
+            if (0 == sws_isSupportedOutput((AVPixelFormat) outParam.format))
+            {
+                throw StreamError("Unsupported output pixel format " + std::to_string(outParam.format));
+            }
         }
         
-        ~Implementation()
-        {
-            //Close stuff
-            LOGX;
-        }
+        ~Implementation() = default;
         
-        void push(const AVFrame* pFrame)
+        const AVFrame* convert(const AVFrame* pFIn)
         {
-            // Push input data to resampling buffer. Don't retrieve any data yet, as a full frame may not be available
-            assert(hConvCtx_);
-            int ret = swr_convert_frame(hResamplingCtx_.get(), nullptr, pFrame);
+            assert(hConvCtx_ && hFrameOut_);
+            int ret = sws_scale(hConvCtx_.get(), pFIn->data, pFIn->linesize, 0, pFIn->height, hFrameOut_->data, hFrameOut_->linesize);
             if (ret < 0)
             {
                 throw StreamError("Error converting frame to output format.", ret);
             }
+            return hFrameOut_.get();
         }
-        
-        const AVFrame* pop()
-        {
-            assert(hResamplingCtx_);
-            int ret = swr_get_out_samples(hResamplingCtx_.get(), 0);
-            if (ret < 0)
-            {
-                throw TranscoderError("Cannot determine number of buffered samples.");
-            }
-            else if (ret < minBufferSize_)
-            {
-                return nullptr; //no error just insufficient data for a full frame
-            }
-            hOutFrame_->nb_samples = hOutCodecPar_->frame_size;
-            ret = swr_convert_frame(hResamplingCtx_.get(), hOutFrame_.get(), nullptr);
-            if (ret < 0)
-            {
-                throw TranscoderError("Error converting audio to output format.", ret);
-            }
-            assert(hOutFrame_->nb_samples <= hOutCodecPar_->frame_size);
-            if (0 == hOutFrame_->nb_samples)
-            {
-                assert(swr_get_out_samples(hResamplingCtx_.get(), 0) == 0);
-                return nullptr;  //no data left
-            }
-            hOutFrame_->pts = timeStamp_;
-            timeStamp_ += hOutFrame_->nb_samples;
-            return hOutFrame_.get();
-        }
-
     };  //::avtools::Transcoder::Implementation
     
     //==========================================
@@ -130,29 +113,16 @@ namespace avtools
 
     Transcoder::~Transcoder() = default;
     
-    void Transcoder::push(const AVFrame* pFrame)
+    const AVFrame* Transcoder::convert(const AVFrame* pF)
     {
         assert(pImpl_);
         try
         {
-            pImpl_->push(pFrame);
+            return pImpl_->convert(pF);
         }
-        catch(std::exception& err)
+        catch (std::exception& err)
         {
-            std::throw_with_nested( StreamError("Transcoder: Error pushing frame to transcoder."));
-        }
-    }
-    
-    const AVFrame* pop()
-    {
-        assert(pImpl_);
-        try
-        {
-            return pImpl_->pop();
-        }
-        catch(std::exception& err)
-        {
-            std::throw_with_nested( StreamError("Transcoder: Error receiving frames from transcoder."));
+            std::throw_with_nested( StreamError("Transcoder: Error converting frame.") );
         }
     }
 }   //::avtools

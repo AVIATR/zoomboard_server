@@ -14,6 +14,7 @@
 
 struct AVFrame;
 struct AVStream;
+struct AVDictionary;
 
 namespace avtools
 {
@@ -23,26 +24,36 @@ namespace avtools
     {
     public:
         typedef std::unique_ptr<StreamReader> Handle;   ///< handle to mmreader
-                
+
         /// Ctor that opens a file
-        /// @param[in] streamName name of media file to open
+        /// @param[in] url url of media file to open
         /// @throw std::runtime_exception if there was an error opening the stream.
-        StreamReader(const std::string& streamName);
-        
+        StreamReader(const std::string& url);
+
+        /// More general ctor
+        /// @param[in, out] opts stream options to use, such as url, resolution & frame rate.
+        /// On return, this dictionary should contain the actual values used in opening.
+        /// @throw std::runtime_exception if there was an error opening the stream.
+        StreamReader(const AVDictionary& opts);
+
         /// Dtor
         ~StreamReader();
         
         /// Opens a new file for reading
-        /// @param[in] streamName name of stream to open
+        /// @param[in] fileName name of file to open
         /// @return a new handle to the multimedia reader for the opened file, nullptr if a file could not be opened.
-        static Handle Open(const std::string& streamName) noexcept;
+        static Handle Open(const std::string& fileName) noexcept;
         
-        /// @return the decodable media streams found in the opened file. If no file is open, or no decodable streams are found, an empty vector is returned.
-        // std::vector<const AVStream*> getOpenedStreams() const;
-        
-        /// @return the first opened audio stream
-        // const AVStream* getFirstAudioStream() const;
-        
+        /// Opens a stream
+        /// @param[in] opts AVDictionary instance that contains entries for the url to open, desired
+        /// width, height etc for an input device, etc. it should have the options:
+        /// * url: name of file, or name of device
+        /// * driver: for a capture device, name of the driver to use (e.g., v4l2, avfoundation, etc.)
+        /// * width: for a capture device, desired width. If device doesn't support this, a different value may be subbed
+        /// * height: for a capture device, desired height. If device doesn't support this, a different value may be subbed
+        /// @return a new handle to the multimedia reader for the opened file, nullptr if a file could not be opened.
+        static Handle Open(const AVDictionary& opts) noexcept;
+
         /// @return the first opened video stream
         const AVStream* getVideoStream() const;
         

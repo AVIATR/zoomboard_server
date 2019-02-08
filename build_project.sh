@@ -30,6 +30,7 @@ case $key in
         ;;
     -b|--build)
         ARGS+=(--build)
+        DO_BUILD_BINARIES=yes
         echo "Project binaries will be built."
         shift #past switch
         ;;
@@ -61,3 +62,8 @@ else
     echo "Building make project in ${TARGET_DIR}"
 fi
 cmake "${ARGS[@]}"
+
+if [ "${DO_BUILD_BINARIES}" = yes ]; then
+    echo "Building binaries"
+    make -C ${TARGET_DIR}
+fi

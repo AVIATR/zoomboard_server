@@ -12,6 +12,7 @@
 #include <stdexcept>
 //#include <iostream>
 #include "log.hpp"
+#include <memory>
 
 extern "C" {
 #include <libavformat/avformat.h>
@@ -19,6 +20,37 @@ extern "C" {
 #include <libavutil/pixdesc.h>
 #include <libavutil/frame.h>
 #include <libavdevice/avdevice.h>
+}
+
+using avtools::StreamError;
+namespace
+{
+    /// Initializes and returns a format context using the information in the provided dictionary
+    
+//    avtools::FormatContextHandle initFormatContext(AVDictionary* pDict)
+//    {
+//        assert(pDict);
+//        avdevice_register_all();    // Register devices
+//        //        av_register_all();          // Register codecs - his is deprecated for ffmpeg >4.0
+//        AVFormatContext* p = nullptr;
+//        AVInputFormat *pFormat = nullptr;
+//        // Get the input format
+//        const AVDictionaryEntry* pDriver = av_dict_get(pDict, "driver", nullptr, 0);
+//        if (pDriver)
+//        {
+//            pFormat = av_find_input_format(pDriver->value);
+//        }
+//
+//        assert(av_dict_get(pDict, "url", nullptr, 0));    //url must be provided
+//        const char* url = av_dict_get(pDict, "url", nullptr, 0)->value;
+//        int status = avformat_open_input( &p, url, pFormat, &pDict );
+//        if( status < 0 )  // Couldn't open file
+//        {
+//            throw StreamError("Could not open " + std::string(url), status);
+//        }
+//        assert(p);
+//        return avtools::FormatContextHandle(p, [](AVFormatContext* pp) {avformat_close_input(&pp); });
+//    }
 }
 
 namespace avtools
@@ -62,41 +94,27 @@ namespace avtools
                 stream_ = -1;
             }
         }
-    public:
-        /// Ctor
+
+        /// Ctor to open a file
         /// @param[in] filename name of file to open
-        Implementation(const std::string& streamName):
-        hFormatCtx_( nullptr ),
+        Implementation( FormatContextHandle h):
+        hFormatCtx_( std::move(h) ),
         hPkt_( allocatePacket() ),
         hCC_( allocateCodecContext() ),
         hFrame_( allocateFrame() ),
         stream_(-1)
         {
-            if (!hPkt_ || !hCC_ || !hFrame)
+            if (!hPkt_ || !hCC_ || !hFrame_)
             {
                 throw StreamError("Allocation error.");
             }
             hPkt_->stream_index = -1;   //no streams opened yet
-            //Open format context
-            //Register devices:
-            avdevice_register_all();
-            AVFormatContext* p = nullptr;
-            int status = avformat_open_input( &p, streamName.c_str(), nullptr, nullptr);
-            if( status < 0 )  // Couldn't open file
-            {
-                throw StreamError("Could not open stream " + filename, status);
-            }
-            assert(p);
-            hFormatCtx_ = avtools::FormatContextHandle(p, [](AVFormatContext* pp) {avformat_close_input(&pp); });
-
-            // Register codecs
-            av_register_all();
 
             // Retrieve stream information
-            status = avformat_find_stream_info(hFormatCtx_.get(), nullptr);
-            if( status < 0 ) // Couldn't find stream information
+            int ret = avformat_find_stream_info(hFormatCtx_.get(), nullptr);
+            if( ret < 0 ) // Couldn't find stream information
             {
-                throw StreamError("Could not find stream information in " + filename, status);
+                throw StreamError("Could not find stream information", ret);
             }
             const int nStreams = hFormatCtx_->nb_streams;
             LOGD("StreamReader: Format context found.\n\tStart time = ", hFormatCtx_->start_time, "\n\t#streams = ", nStreams);
@@ -121,7 +139,7 @@ namespace avtools
                 }
                 AVDictionary *opts = nullptr;
                 av_dict_set(&opts, "refcounted_frames", "1", 0);
-                AVCodecContext* pCC = h->hCC_.get();
+                AVCodecContext* pCC = hCC_.get();
                 int ret = avcodec_parameters_to_context(pCC, pStream->codecpar);
                 if (ret < 0)
                 {
@@ -140,21 +158,79 @@ namespace avtools
             }
             if (stream_ < 0)
             {
-                throw StreamError("Unable to open any video streams from " + streamName);
+                throw StreamError("Unable to open any video streams");
             }
         }
+    public:
 
+        static std::unique_ptr<Implementation> Open(const AVDictionary& dict)
+        {
+            avdevice_register_all();    // Register devices
+            //        av_register_all();          // Register codecs - his is deprecated for ffmpeg >4.0
+            AVFormatContext* p = nullptr;
+            AVInputFormat *pFormat = nullptr;
+            // Get the input format
+            const AVDictionaryEntry* pDriver = av_dict_get(&dict, "driver", nullptr, 0);
+            if (pDriver)
+            {
+                pFormat = av_find_input_format(pDriver->value);
+            }
+            
+            assert(av_dict_get(&dict, "url", nullptr, 0));    //url must be provided
+            const char* url = av_dict_get(&dict, "url", nullptr, 0)->value;
+            AVDictionary* pDict = nullptr;
+            int status = av_dict_copy(&pDict, &dict, 0);
+            if (status < 0)
+            {
+                throw StreamError("Unable to clone input dictionary.");
+            }
+            
+            status = avformat_open_input( &p, url, pFormat, &pDict );
+            if( status < 0 )  // Couldn't open file
+            {
+                throw StreamError("Could not open " + std::string(url), status);
+            }
+#ifndef NDEBUG
+            char* buf=nullptr;
+            status = av_dict_get_string(pDict, &buf, '\t', '\n');
+            if (status < 0)
+            {
+                LOGE("Could not get unused options: ", av_err2str(status));
+            }
+            LOGD("Unused options while opening StreamReader:", buf);
+            av_freep(&buf);
+#endif
+            assert(p);
+            return std::unique_ptr<Implementation>(
+                            new Implementation(FormatContextHandle(p, [](AVFormatContext* pp){avformat_close_input(&pp);})) );
+        }
+        
+        /// Static constructor
+        /// @param[in] url url to open
+        /// @return a handle to a StreamReader::Implementation instance.
+        static std::unique_ptr<Implementation> Open(const std::string& filename)
+        {
+            AVDictionary* pOpts = nullptr;
+            int ret = av_dict_set(&pOpts, "url", filename.c_str(), 0);
+            avtools::Handle<AVDictionary> hDict(pOpts, [](AVDictionary* p){if (p) av_dict_free(&p);});
+            if (ret < 0)
+            {
+                throw StreamError("Unable to set url in dictionary. ", ret);
+            }
+            return Open(*pOpts);
+        }
+        
         /// @return a list of opened streams
         const AVStream* stream() const
         {
-            assert( (stream_ >= 0) && (stream < hFormatCtx_->nb_streams) );
-            return hFormatCtx_->streams[stream_]
+            assert( (stream_ >= 0) && (stream_ < hFormatCtx_->nb_streams) );
+            return hFormatCtx_->streams[stream_];
         }
 
         /// Dtor
         ~Implementation()
         {
-            close()
+            close();
         }
 
         /// Reads a frame
@@ -164,10 +240,11 @@ namespace avtools
         const AVStream* read(AVFrame const *& pFrame)
         {
             assert(stream_ >= 0);    //Otherwise stream is closed and we shouldn't be calling this
+            int ret;
             int stream = hPkt_->stream_index;
             if (stream < 0)    //read more packets
             {
-                int ret = av_read_frame(hFormatCtx_.get(), hPkt_.get()); //read a new packet
+                ret = av_read_frame(hFormatCtx_.get(), hPkt_.get()); //read a new packet
                 if (AVERROR_EOF == ret)
                 {
                     LOGD("StreamReader: reached end of file. Closing.");
@@ -180,7 +257,7 @@ namespace avtools
                     throw StreamError("Error reading packets", ret);
                 }
                 stream = hPkt_->stream_index;
-                if ( stream != stream_] )   //no decoder open for this stream. Skip & read more packets
+                if ( stream != stream_ )   //no decoder open for this stream. Skip & read more packets
                 {
                     LOGD("StreamReader: Skipping packet from undecoded stream.");
                     unrefPacket(hPkt_);
@@ -188,7 +265,7 @@ namespace avtools
                     return read(pFrame);
                 }
                 //Valid packet & decoder - send packet to decoder
-                ret = avcodec_send_packet(hCC_.get(), &pkt);
+                ret = avcodec_send_packet(hCC_.get(), hPkt_.get());
                 if (ret < 0)
                 {
                     throw StreamError("Unable to decode packet", ret);
@@ -203,10 +280,10 @@ namespace avtools
                     assert(hFrame_);
                     if (hFrame_->pts == AV_NOPTS_VALUE)
                     {
-                        hFrame_->pts = av_frame_get_best_effort_timestamp( hFrame_.get() );
+                        hFrame_->pts = hFrame_->best_effort_timestamp;
                     }
                     pFrame = hFrame_.get();
-                    return stream();
+                    return hFormatCtx_->streams[stream_];
                 case AVERROR(EAGAIN):   //more packets need to be read & sent to the decoder before decoding
                     unrefPacket(hPkt_);
                     hPkt_->stream_index = -1;
@@ -231,32 +308,56 @@ namespace avtools
     //
     //==========================================
     
-    StreamReader::StreamReader(const std::string& streamName) try:
-    pImpl_(new Implementation(streamName))
+    StreamReader::StreamReader(const std::string& url) try:
+    pImpl_( Implementation::Open(url) )
     {
-        assert (pImpl);
+        assert (pImpl_);
         LOGD(logging::LINE_SINGLE, "Opened video stream:", avtools::getStreamInfo(getVideoStream()), "\n", logging::LINE_SINGLE);
     }
     catch (std::exception& err)
     {
-        std::throw_with_nested( StreamError("StreamReader: Unable to open " + filename) );
+        std::throw_with_nested( StreamError("StreamReader: Unable to open reader") );
     }
     
+    StreamReader::StreamReader(const AVDictionary& opts) try:
+    pImpl_( Implementation::Open( opts ) )
+    {
+        assert (pImpl_);
+        LOGD(logging::LINE_SINGLE, "Opened video stream:", avtools::getStreamInfo(getVideoStream()), "\n", logging::LINE_SINGLE);
+    }
+    catch (std::exception& err)
+    {
+        std::throw_with_nested( StreamError("StreamReader: Unable to open reader") );
+    }
+
     StreamReader::~StreamReader() = default;
     
-    StreamReader::Handle StreamReader::Open(const std::string& streamName)
+    StreamReader::Handle StreamReader::Open(const std::string& url) noexcept
     {
         try
         {
-            return Handle(new StreamReader(filename))
+            return Handle(new StreamReader(url));
         }
         catch (std::exception& err)
         {
-            LOGE("StreamReader: Unable to open stream ", streamName);
-            return nullptr
+            LOGE("StreamReader: Unable to open device. Err: ", err.what());
+            return nullptr;
         }
     }
     
+    StreamReader::Handle StreamReader::Open(const AVDictionary& opts) noexcept
+    {
+        try
+        {
+            return Handle(new StreamReader(opts));
+        }
+        catch (std::exception& err)
+        {
+            LOGE("StreamReader: Unable to open device. Err: ", err.what());
+            return nullptr;
+        }
+    }
+
     const AVStream* StreamReader::read(AVFrame const*& pFrame)
     {
         assert(pImpl_);
@@ -266,7 +367,7 @@ namespace avtools
         }
         catch (std::exception& err)
         {
-            pImpl_->reset(nullptr);
+            pImpl_.reset(nullptr);
             std::throw_with_nested( StreamError("StreamReader: Unable to read frames.") );
         }
     }

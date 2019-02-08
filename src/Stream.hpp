@@ -15,6 +15,7 @@
 #include <cassert>
 #include <string>
 #include <functional>
+#include <iostream>
 
 extern "C" {
 #include <libavformat/avformat.h>
@@ -29,6 +30,7 @@ extern "C" {
 struct AVPacket;
 struct AVFormatContext;
 struct AVCodecParameters;
+struct AVDictionary;
 
 namespace avtools
 {
@@ -49,6 +51,41 @@ namespace avtools
         inline virtual ~StreamError() = default;
     };
 
+    /// @class Wrapper around AVDictionary
+    class Dict
+    {
+    private:
+        AVDictionary* pDict_;                                   ///< actual dictionary
+    public:
+        inline Dict(): pDict_(nullptr) {}                       ///< Ctor
+        inline ~Dict() {if (pDict_) av_dict_free(&pDict_); }    ///< Dtor
+        inline AVDictionary* get() {return pDict_;}             ///< @return pointer to the wrapepr dictionary
+        inline const AVDictionary* get() const {return pDict_;} ///< @return pointer to the wrapepr dictionary
+        /// Adds a key/value pair to the dictionary
+        /// @param[in] key new key to add
+        /// @param[in] value value of the key
+        /// @throw std::runtime_error if there was an error adding the key
+        void add(const std::string& key, const std::string& value);
+        /// Adds a key/value pair to the dictionary
+        /// @param[in] key new key to add
+        /// @param[in] value value of the key
+        /// @throw std::runtime_error if there was an error adding the key
+        void add(const std::string& key, std::int64_t value);
+        /// Returns the value of a key in the dictionary.
+        /// @param[in] key key to search for
+        /// @return value of the key
+        /// @throw std::runtime_error if there was an error retrieving the value
+        std::string at(const std::string& key) const;
+        /// Returns the value of a key in the dictionary.
+        /// @param[in] key key to search for
+        /// @return value of the key
+        /// @throw std::runtime_error if there was an error retrieving the value
+        std::string operator[](const std::string& key) const;
+        /// Clones a dictionary. Any entries in this dictionary are lost.
+        /// @param[in] dict source dictionary
+        Dict& operator=(const Dict& dict);
+    };  //avtools::Dict
+    
     /// Handle typedef to handle structures that require freeing up
     template<class T>
     using Handle = std::unique_ptr<T, std::function<void(T*)>>;
@@ -61,6 +98,20 @@ namespace avtools
     {
         return FrameHandle(av_frame_alloc(), [](AVFrame* p) { if (p) av_frame_free(&p);});
     }
+    
+    /// Allocates and output frame for a given set of codec parameters
+    /// @param[info] codecPar codec codec parameters
+    /// @return a pointer to a newly alloated frame corresponding to codecPar, nullptr if a frame could not be allocated.
+    FrameHandle allocateFrame(const AVCodecParameters& codecPar);
+    
+    /// Allocates a video frame with a given size, format and sample rate.
+    /// Basically combines av_frame_alloc() and initVideoFrame()
+    /// @param[in] width how wide the image is in pixels
+    /// @param[in] height how high the image is in pixels
+    /// @param[in] format pixel format
+    /// @param[in] cs color space type
+    /// @return pointer to a new frame, nullptr if a frame could not be allocated
+    FrameHandle allocateVideoFrame(int width, int height, AVPixelFormat format, AVColorSpace cs=AVColorSpace::AVCOL_SPC_RGB);
 
     /// Clones a frame. If frame is reference counted, same data is referenced. otherwise, new data buffers are created
     /// @param[in] pF ptr to original frame
@@ -235,11 +286,6 @@ namespace avtools
     /// @param[in] indent number of tabs to indent each line of text
     std::string getFrameInfo(const AVFrame* pFrame, const AVStream* pStr, int indent=0);
 
-    /// Allocates and output frame for a given set of codec parameters
-    /// @param[info] codecPar codec codec parameters
-    /// @return a pointer to a newly alloated frame corresponding to codecPar, nullptr if a frame could not be allocated.
-    FrameHandle allocateFrame(const AVCodecParameters& codecPar);
-
     /// Initializes a frame
     /// @param[in] pFrame frame to be initialized.
     /// @param[in] codecPar codec parameters containing details of the audio codec
@@ -247,14 +293,14 @@ namespace avtools
 //    int initFrame(AVFrame* pFrame, const AVCodecParameters& codecPar);
 
     /// Dumps info for.a particular stream to stderr
-    inline void dumpStreamInfo(AVFormatContext* p, int n, bool isOutput);
+    inline void dumpStreamInfo(AVFormatContext* p, int n, bool isOutput)
     {
         assert(p);
         assert( (n >= 0) && (n < p->nb_streams) );
 #ifndef NDEBUG
         const int level = av_log_get_level();
         av_log_set_level(AV_LOG_VERBOSE);
-        av_dump_format(p, n, p->filename, isOutput ? 1 : 0);
+        av_dump_format(p, n, p->url, isOutput ? 1 : 0);
         av_log_set_level(level);
 #endif
     }
@@ -269,7 +315,7 @@ namespace avtools
         int output = isOutput ? 1 : 0;
         for (int n = 0; n < p->nb_streams; ++n)
         {
-            av_dump_format(p, n, p->filename, output);
+            av_dump_format(p, n, p->url, output);
         }
         av_log_set_level(level);
 #endif

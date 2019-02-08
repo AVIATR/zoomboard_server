@@ -24,20 +24,25 @@ namespace avtools
     {
     public:
         
-        typedef std::unique_ptr<MtreamWriter> Handle;   ///< handle to this class
+        typedef std::unique_ptr<StreamWriter> Handle;   ///< handle to this class
         
         /// Ctor that opens a stream
         /// @param[in] url stream URL
         /// @param[in] codecParam video codec parameters
         /// @param[in] timebase timebase for the video stream
         /// @param[in] allowExperimentalCodecs whether to allow experimental codecs
-        /// @throw MMError if stream cannot be opened for writing
+        /// @throw StreamError if stream cannot be opened for writing
         StreamWriter(
             const std::string& url, 
             const AVCodecParameters& codecParam, 
             const TimeBaseType& timebase, 
             bool allowExperimentalCodecs=false
         );
+        
+        /// Ctor that opens a stream
+        /// @param[in] dict a dictionary containing the url, codec parameters, timebase etc. to use
+        /// @throw StreamError if an error occurs while opening the stream
+        StreamWriter(const AVDictionary& dict);
 
         ///Dtor
         ~StreamWriter();
@@ -52,6 +57,12 @@ namespace avtools
             bool allowExperimentalCodecs=false
         ) noexcept;
 
+        /// Opens a stream
+        /// @param[in] dict a dictionary containing the url, codec parameters, timebase etc. to use
+        /// @return a handle to the streamwriter instance
+        /// @throw StreamError if an error occurs while opening the stream
+        static Handle Open(const AVDictionary& dict) noexcept;
+        
         /// @return opened video stream
         const AVStream* getStream() const;
         

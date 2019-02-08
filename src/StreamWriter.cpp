@@ -7,256 +7,14 @@
 //
 
 #include "StreamWriter.hpp"
-#include "MultiMedia.hpp"
-#include "MediaUtils.hpp"
 #include "log.hpp"
 #include <string>
 
 extern "C" {
 #include <libavformat/avformat.h>
 #include <libavcodec/avcodec.h>
+#include <libavdevice/avdevice.h>
 }
-
-#ifndef NDEBUG
-#include <map>
-#endif
-
-namespace
-{
-    /// Allocates a new output format context
-    /// @param[in] filename name of file. Container type is guessed from filename.
-    /// @return a newly initialized FormatContext
-    avtools::FormatContextHandle allocateOutputFormatContext(const std::string& filename)
-    {
-        AVFormatContext* p = nullptr;
-        if (avformat_alloc_output_context2(&p, nullptr, nullptr, filename.c_str()) < 0)
-        {
-            return nullptr;
-        }
-        assert(p);
-        return avtools::FormatContextHandle(p, [](AVFormatContext* pp) {avformat_free_context(pp); });
-    }
-
-    ///@class Encoder for a particular stream
-    class StreamEncoder
-    {
-    private:
-
-        avtools::CodecContextHandle hCC_;   ///< encoder codec context
-        avtools::PacketHandle hPkt_;
-        
-        /// Ctor
-        /// @param[in] codecParam codec parameters to use
-        StreamEncoder(const AVCodecParameters& codecParam, avtools::TimeBaseType timebase, bool useGlobalHeader, int compliance):
-        hCC_( avtools::allocateCodecContext() ),
-        hPkt_( avtools::allocatePacket() )
-        {
-            if (!hCC_)
-            {
-                throw EncoderError("Unable to allocate codec context");
-            }
-            if (!hPkt_)
-            {
-                throw EncoderError("nable to allocate packet");
-            }
-            avtools::initPacket(hPkt_);
-            
-            // Set up encoder context
-            int ret = avcodec_parameters_to_context(hCC_.get(), &codecParam);
-            if (ret < 0)
-            {
-                throw EncoderError("Unable to copy codec parameters to encoder context.", ret);
-            }
-            AVDictionary *opts = nullptr;
-            
-            //Initialize stream to use the provided codec context
-            hCC_->strict_std_compliance = compliance;
-            const AVMediaType codecType = codecParam.codec_type;
-            const AVCodecID codecId = codecParam.codec_id;
-            AVCodec* pEncoder = avcodec_find_encoder(codecId);
-            if (!pEncoder)
-            {
-                throw EncoderError("Unable to find an encoder for " + std::string(avcodec_get_name(codecId)) );
-            }
-
-            switch (codecType)
-            {
-                case AVMEDIA_TYPE_AUDIO:
-                    break;
-                case AVMEDIA_TYPE_VIDEO:
-                    if (AV_CODEC_ID_H264 == codecId)  // ffmpeg has issues with x264, and the default presets are broken. These need to be manually fixed for encoding
-                    {
-                        int losses = 0;
-                        hCC_->pix_fmt = avcodec_find_best_pix_fmt_of_list(pEncoder->pix_fmts, (AVPixelFormat) codecParam.format, false, &losses);
-                        if (losses)
-                        {
-                            LOGW("StreamEncoder: Converting picture format from ", (AVPixelFormat) codecParam.format, " to output format ", hCC_->pix_fmt, "will result in losses due to: ");
-                            if (losses & FF_LOSS_RESOLUTION)
-                            {
-                                LOGD("\tresolution change");
-                            }
-                            if (losses & FF_LOSS_DEPTH)
-                            {
-                                LOGD("\tcolor depth change");
-                            }
-                            if (losses & FF_LOSS_COLORSPACE)
-                            {
-                                LOGD("\tcolorspace conversion");
-                            }
-                            if (losses & FF_LOSS_COLORQUANT)
-                            {
-                                LOGD("\tcolor quantization");
-                            }
-                            if (losses & FF_LOSS_CHROMA)
-                            {
-                                LOGD("\tloss of chroma");
-                            }
-                        }
-                        hCC_->qmin = 10;
-                        hCC_->qmax = 51;
-                        hCC_->qcompress = 0.6;
-                        hCC_->max_qdiff = 4;
-                        hCC_->me_range = 3;
-                        hCC_->max_b_frames = 3;
-//                        hCC_->bit_rate = 1000000;
-                        hCC_->refs = 3;
-                        ret = av_dict_set(&opts, "profile", "main", 0);   //also initializes opts
-                        if (ret < 0)
-                        {
-                            LOGE("StreamEncoder: Unable to set profile for H264 encoder: ", av_err2str(ret));
-                        }
-                        ret = av_dict_set(&opts, "preset", "medium", 0);
-                        if (ret < 0)
-                        {
-                            LOGE("StreamEncoder: Unable to set preset for H264 encoder: ", av_err2str(ret));
-                        }
-                        ret = av_dict_set(&opts, "level", "3.1", 0);
-                        if (ret < 0)
-                        {
-                            LOGE("StreamEncoder: Unable to set level for H264 encoder: ", av_err2str(ret));
-                        }
-                        ret = av_dict_set(&opts, "mpeg_quant", "0", 0);
-                        if (ret < 0)
-                        {
-                            LOGE("StreamEncoder: Unable to set mpeg quantization for H264 encoder: ", av_err2str(ret));
-                        }
-                        assert(opts);
-                    }
-                    break;
-                default:
-                    assert(false);  //should not come here.
-            }
-            
-            // let codec know if we are using global header
-            if (useGlobalHeader)
-            {
-                hCC_->flags |= CODEC_FLAG_GLOBAL_HEADER;
-            }
-            
-            // Set timebase
-            hCC_->time_base = timebase;
-            
-            // open encoder
-            ret = avcodec_open2(hCC_.get(), pEncoder, &opts);
-            if (ret < 0)
-            {
-                throw EncoderError("Unable to open encoder for codec " + std::string(avcodec_get_name(codecId)), ret);
-            }
-            LOGD("StreamEncoder: Opened encoder for ", avtools::getCodecInfo(hCC_.get()));
-        }
-
-    public:
-        
-        /// Handle type
-        typedef std::unique_ptr<StreamEncoder> Handle;
-
-        static Handle Create(const AVCodecParameters& codecParam, avtools::TimeBaseType timebase, bool useGlobalHeader, int compliance) noexcept
-        {
-            try
-            {
-                Handle h(new StreamEncoder(codecParam, timebase, useGlobalHeader, compliance));
-                assert( h->isOpen() );
-                return h;
-            }
-            catch(std::exception& err)
-            {
-                LOGE("StreamEncoder: Error opening encoder: ", err.what());
-                return nullptr;
-            }
-        }
-
-        /// Dtor
-        ~StreamEncoder()
-        {
-            LOGD("StreamEncoder: Closing codec ", hCC_->codec_id);
-        }
-        
-#ifndef NDEBUG
-        inline const AVCodec* codec() const
-        {
-            assert( isOpen() );
-            return hCC_->codec;
-        }
-        
-        inline const AVCodecContext* context() const
-        {
-            assert( isOpen() );
-            return hCC_.get();
-        }
-#endif
-        
-        void push(const AVFrame* pFrame)
-        {
-            assert(isOpen());
-//            AVFrame* pp = const_cast<AVFrame*>(pFrame);
-//            pp->dts = AV_NOPTS_VALUE;
-            
-            int ret = avcodec_send_frame(hCC_.get(), pFrame);
-            if (ret < 0)
-            {
-                throw EncoderError("Error sending frames to encoder", ret);
-            }
-        }
-        
-        AVPacket* pop()
-        {
-            assert(isOpen());
-            avtools::unrefPacket(hPkt_);
-            int ret = avcodec_receive_packet(hCC_.get(), hPkt_.get());
-            if (ret == AVERROR(EAGAIN))
-            {
-                return nullptr;
-            }
-            else if (ret == AVERROR_EOF)
-            {
-                return nullptr;
-            }
-            else if (ret < 0)
-            {
-                throw EncoderError("Error reading packets from encoder", ret);
-            }
-            return hPkt_.get();
-        }
-        
-        /// @return type of media this decoder belongs to
-        inline AVMediaType type() const
-        {
-            assert(isOpen());
-            return hCC_->codec_type;
-        }
-
-#ifndef NDEBUG
-        /// @return true if a encoder is open, false otherwise.
-        inline bool isOpen() const noexcept
-        {
-            assert(hCC_);
-            return avcodec_is_open(hCC_.get());
-        }
-#endif
-
-    };
-    
-}   //::<anon>
 
 namespace avtools
 {
@@ -269,48 +27,221 @@ namespace avtools
     {
     private:
         FormatContextHandle                 hCtx_;      ///< format context for the output file
-        avtools::CodecContextHandle         hCC_;       ///< encoder codec context
-        avtools::PacketHandle               hPkt_;      ///< packet to encode the frames in
+        CodecContextHandle                  hCC_;       ///< encoder codec context
+        PacketHandle                        hPkt_;      ///< packet to encode the frames in
         
-    public:
-        /// Ctor
-        Implementation(const std::string& filename):
-        hCtx_( allocateOutputFormatContext(filename) ),
+        /// Closes everything
+        void close()
+        {
+            if (hCtx_)
+            {
+                //pop all delayed packets from encoder
+                LOGD("StreamWriter: Flushing delayed packets from encoders.");
+                try
+                {
+                    write(nullptr);
+                }
+                catch (std::exception& err)
+                {
+                    LOGE("Error flushing packets and closing encoder: ", err.what());
+                }
+                //Write trailer
+                av_write_trailer(hCtx_.get());
+#ifndef NDEBUG
+                avtools::dumpContainerInfo(hCtx_.get(), true);
+#endif
+                LOGD("StreamWriter: Closing stream.");
+                
+                // Close file if output is file
+                if ( !(hCtx_->oformat->flags & AVFMT_NOFILE) )
+                {
+                    avio_close(hCtx_->pb);
+                }
+                hCC_.reset(nullptr);
+                hPkt_.reset(nullptr);
+                hCtx_.reset(nullptr);
+            }
+        }
+        
+//        /// Ctor
+//        Implementation(
+//            const std::string& url,
+//            const AVCodecParameters& codecParam,
+//            const TimeBaseType& timebase,
+//            bool allowExperimentalCodecs=false
+//        ):
+//        hCtx_( allocateOutputFormatContext(url) ),
+//        hCC_( avtools::allocateCodecContext() ),
+//        hPkt_( avtools::allocatePacket() )
+//        {
+////            av_register_all();
+//            if (!hCtx_ || !hCC_ || !hPkt_)
+//            {
+//                throw StreamError("Unable to allocate contexts.");
+//            }
+//            avtools::initPacket(hPkt_);
+//
+//            //Open the output file
+//            if ( !(hCtx_->flags & AVFMT_NOFILE) )
+//            {
+//                int ret = avio_open(&hCtx_->pb, url.c_str(), AVIO_FLAG_WRITE);
+//                if (ret < 0)
+//                {
+//                    throw StreamError("Could not open " + url, ret);
+//                }
+//                assert(hCtx_->pb);
+//            }
+//            LOGD("StreamWriter: Opened output stream ", url, " in ", hCtx_->oformat->long_name, " format.");
+//
+//            //Add the video stream to the output context
+//            // Ensure that the provided container can contain the requested output codec
+//            assert (codecParam.codec_type == AVMEDIA_TYPE_VIDEO);
+//            const int compliance = (allowExperimentalCodecs ? FF_COMPLIANCE_EXPERIMENTAL : FF_COMPLIANCE_NORMAL);
+//            const AVCodecID codecId = codecParam.codec_id;
+//            AVOutputFormat* pOutFormat = hCtx_->oformat;
+//            assert(pOutFormat);
+//            int ret = avformat_query_codec(pOutFormat, codecId, compliance);
+//            if ( ret <= 0 )
+//            {
+//                throw StreamError("File format " + std::string(pOutFormat->name) + " is unable to store " + std::to_string(codecId) + " streams.", ret);
+//            }
+//
+//            // Find encoder
+//            const AVCodec* pEncoder = avcodec_find_encoder(codecId);
+//            if (!pEncoder)
+//            {
+//                throw StreamError("Cannot find an encoder for " + std::to_string(codecId));
+//            }
+//            // Set up encoder context
+//            ret = avcodec_parameters_to_context(hCC_.get(), &codecParam);
+//            if (ret < 0)
+//            {
+//                throw StreamError("Unable to copy codec parameters to encoder context.", ret);
+//            }
+//            AVDictionary *opts = nullptr;
+//
+//            //Initialize codec context
+//            hCC_->strict_std_compliance = compliance;
+//            hCC_->flags |= AV_CODEC_FLAG_GLOBAL_HEADER; // let codec know if we are using global header
+//            hCC_->time_base = timebase;        // Set timebase
+//            if (AV_CODEC_ID_H264 == codecId)   // ffmpeg has issues with x264, and the default presets are broken. These need to be manually fixed for encoding
+//            {
+//                int losses = 0;
+//                hCC_->pix_fmt = avcodec_find_best_pix_fmt_of_list(pEncoder->pix_fmts, (AVPixelFormat) codecParam.format, false, &losses);
+//                if (losses)
+//                {
+//                    LOGW("StreamEncoder: Converting picture format from ", (AVPixelFormat) codecParam.format, " to output format ", hCC_->pix_fmt, "will result in losses due to: ");
+//                    if (losses & FF_LOSS_RESOLUTION)
+//                    {
+//                        LOGD("\tresolution change");
+//                    }
+//                    if (losses & FF_LOSS_DEPTH)
+//                    {
+//                        LOGD("\tcolor depth change");
+//                    }
+//                    if (losses & FF_LOSS_COLORSPACE)
+//                    {
+//                        LOGD("\tcolorspace conversion");
+//                    }
+//                    if (losses & FF_LOSS_COLORQUANT)
+//                    {
+//                        LOGD("\tcolor quantization");
+//                    }
+//                    if (losses & FF_LOSS_CHROMA)
+//                    {
+//                        LOGD("\tloss of chroma");
+//                    }
+//                }
+//                hCC_->qmin = 10;
+//                hCC_->qmax = 51;
+//                hCC_->qcompress = 0.6;
+//                hCC_->max_qdiff = 4;
+//                hCC_->me_range = 3;
+//                hCC_->max_b_frames = 3;
+////                        hCC_->bit_rate = 1000000;
+//                hCC_->refs = 3;
+//                ret = av_dict_set(&opts, "profile", "main", 0);   //also initializes opts
+//                if (ret < 0)
+//                {
+//                    LOGE("StreamEncoder: Unable to set profile for H264 encoder: ", av_err2str(ret));
+//                }
+//                ret = av_dict_set(&opts, "preset", "medium", 0);
+//                if (ret < 0)
+//                {
+//                    LOGE("StreamEncoder: Unable to set preset for H264 encoder: ", av_err2str(ret));
+//                }
+//                ret = av_dict_set(&opts, "level", "3.1", 0);
+//                if (ret < 0)
+//                {
+//                    LOGE("StreamEncoder: Unable to set level for H264 encoder: ", av_err2str(ret));
+//                }
+//                ret = av_dict_set(&opts, "mpeg_quant", "0", 0);
+//                if (ret < 0)
+//                {
+//                    LOGE("StreamEncoder: Unable to set mpeg quantization for H264 encoder: ", av_err2str(ret));
+//                }
+//                assert(opts);
+//            }
+//
+//            // open codec for encoding
+//            ret = avcodec_open2(hCC_.get(), pEncoder, &opts);
+//            if (ret < 0)
+//            {
+//                throw StreamError("Unable to open encoder for codec " + std::to_string(codecId), ret);
+//            }
+//            assert( avcodec_is_open(hCC_.get()) );
+//            LOGD("StreamEncoder: Opened encoder for ", avtools::getCodecInfo(hCC_.get()));
+//
+//            // Add stream
+//            AVStream* pStr = avformat_new_stream(hCtx_.get(), pEncoder);
+//            if ( !pStr )
+//            {
+//                throw StreamError("Unable to add stream for " + std::to_string(codecId));
+//            }
+//
+//            //copy codec params to stream
+//            avcodec_parameters_from_context(pStr->codecpar, hCC_.get());
+//            pStr->time_base = timebase;
+//
+//            assert( pStr->codecpar && (pStr->codecpar->codec_id == codecId) && (pStr->codecpar->codec_type == AVMEDIA_TYPE_VIDEO) );
+//            assert( (hCtx_->nb_streams == 1) && (pStr == hCtx_->streams[0]) );
+//            LOGD("StreamWriter: Opened ", *pStr);
+//            // Write stream header
+//            ret = avformat_write_header(hCtx_.get(), nullptr);
+//            if (ret < 0)
+//            {
+//                close();
+//                throw StreamError("Error occurred when writing output stream header.", ret);
+//            }
+//            LOGD("StreamWriter: Opened output container ", hCtx_->url);
+//#ifndef NDEBUG
+//            avtools::dumpContainerInfo(hCtx_.get(), true);
+//#endif
+//        }
+        Implementation(FormatContextHandle h):
+        hCtx_( std::move(h) ),
         hCC_( avtools::allocateCodecContext() ),
         hPkt_( avtools::allocatePacket() )
         {
-            av_register_all();
             if (!hCtx_ || !hCC_ || !hPkt_)
             {
                 throw StreamError("Unable to allocate contexts.");
             }
             avtools::initPacket(hPkt_);
-            
-            //Open the output file
-            if ( !(pCtx_->flags & AVFMT_NOFILE) )
-            {
-                int ret = avio_open(&pCtx_->pb, filename.c_str(), AVIO_FLAG_WRITE);
-                if (ret < 0)
-                {
-                    throw StreamError("Could not open " + filename, ret);
-                }
-                assert(pCtx_->pb);
-            }
-            LOGD("StreamWriter: Opened output stream ", filename, " in ", pCtx_->oformat->long_name, " format.");
-            
+
             //Add the video stream to the output context
             // Ensure that the provided container can contain the requested output codec
             assert (codecParam.codec_type == AVMEDIA_TYPE_VIDEO);
             const int compliance = (allowExperimentalCodecs ? FF_COMPLIANCE_EXPERIMENTAL : FF_COMPLIANCE_NORMAL);
-            const AVCodecID codecId = codecParam.codec_id;            
-            AVOutputFormat* pOutFormat = pCtx_->oformat;
+            const AVCodecID codecId = codecParam.codec_id;
+            AVOutputFormat* pOutFormat = hCtx_->oformat;
             assert(pOutFormat);
             int ret = avformat_query_codec(pOutFormat, codecId, compliance);
             if ( ret <= 0 )
             {
-                throw StreamError("File format " + pOutFormat->name + " is unable to store " + std::to_string(codecId) + " streams.", ret);
+                throw StreamError("File format " + std::string(pOutFormat->name) + " is unable to store " + std::to_string(codecId) + " streams.", ret);
             }
-            
+
             // Find encoder
             const AVCodec* pEncoder = avcodec_find_encoder(codecId);
             if (!pEncoder)
@@ -318,7 +249,7 @@ namespace avtools
                 throw StreamError("Cannot find an encoder for " + std::to_string(codecId));
             }
             // Set up encoder context
-            int ret = avcodec_parameters_to_context(hCC_.get(), &codecParam);
+            ret = avcodec_parameters_to_context(hCC_.get(), &codecParam);
             if (ret < 0)
             {
                 throw StreamError("Unable to copy codec parameters to encoder context.", ret);
@@ -327,142 +258,112 @@ namespace avtools
 
             //Initialize codec context
             hCC_->strict_std_compliance = compliance;
-            if (useGlobalHeader)               // let codec know if we are using global header
-            {
-                hCC_->flags |= CODEC_FLAG_GLOBAL_HEADER;
-            }
-            hCC_->time_base = timebase;        // Set timebase
-            if (AV_CODEC_ID_H264 == codecId)   // ffmpeg has issues with x264, and the default presets are broken. These need to be manually fixed for encoding
-            {
-                int losses = 0;
-                hCC_->pix_fmt = avcodec_find_best_pix_fmt_of_list(pEncoder->pix_fmts, (AVPixelFormat) codecParam.format, false, &losses);
-                if (losses)
-                {
-                    LOGW("StreamEncoder: Converting picture format from ", (AVPixelFormat) codecParam.format, " to output format ", hCC_->pix_fmt, "will result in losses due to: ");
-                    if (losses & FF_LOSS_RESOLUTION)
-                    {
-                        LOGD("\tresolution change");
-                    }
-                    if (losses & FF_LOSS_DEPTH)
-                    {
-                        LOGD("\tcolor depth change");
-                    }
-                    if (losses & FF_LOSS_COLORSPACE)
-                    {
-                        LOGD("\tcolorspace conversion");
-                    }
-                    if (losses & FF_LOSS_COLORQUANT)
-                    {
-                        LOGD("\tcolor quantization");
-                    }
-                    if (losses & FF_LOSS_CHROMA)
-                    {
-                        LOGD("\tloss of chroma");
-                    }
-                }
-                hCC_->qmin = 10;
-                hCC_->qmax = 51;
-                hCC_->qcompress = 0.6;
-                hCC_->max_qdiff = 4;
-                hCC_->me_range = 3;
-                hCC_->max_b_frames = 3;
-//                        hCC_->bit_rate = 1000000;
-                hCC_->refs = 3;
-                ret = av_dict_set(&opts, "profile", "main", 0);   //also initializes opts
-                if (ret < 0)
-                {
-                    LOGE("StreamEncoder: Unable to set profile for H264 encoder: ", av_err2str(ret));
-                }
-                ret = av_dict_set(&opts, "preset", "medium", 0);
-                if (ret < 0)
-                {
-                    LOGE("StreamEncoder: Unable to set preset for H264 encoder: ", av_err2str(ret));
-                }
-                ret = av_dict_set(&opts, "level", "3.1", 0);
-                if (ret < 0)
-                {
-                    LOGE("StreamEncoder: Unable to set level for H264 encoder: ", av_err2str(ret));
-                }
-                ret = av_dict_set(&opts, "mpeg_quant", "0", 0);
-                if (ret < 0)
-                {
-                    LOGE("StreamEncoder: Unable to set mpeg quantization for H264 encoder: ", av_err2str(ret));
-                }
-                assert(opts);
-            }
-            
-            // open codec for encoding
-            ret = avcodec_open2(hCC_.get(), pEncoder, &opts);
-            if (ret < 0)
-            {
-                throw StreamError("Unable to open encoder for codec " + std::to_string(codecId), ret);
-            }
-            assert( avcodec_is_open(hCC_.get()) );
-            LOGD("StreamEncoder: Opened encoder for ", avtools::getCodecInfo(hCC_.get()));
-            
-            // Add stream
-            AVStream* pStr = avformat_new_stream(pCtx_.get(), pEncoder);
-            if ( !pStr )
-            {
-                throw StreamError("Unable to add new stream for " + std::to_string(codecId));
-            }
-            
-            //copy codec params to stream
-            avcodec_parameters_from_context(pStr->codecpar, hCC_.get());
-            pStr->time_base = timebase;
+            hCC_->flags |= AV_CODEC_FLAG_GLOBAL_HEADER; // let codec know if we are using global header
+            hCC_->time_base = timebase;        // Set timebase    public:
+        }
 
-            assert( pStr->codecpar && (pStr->codecpar->codec_id == codecId) && (pStr->codecpar->codec_type == AVMEDIA_TYPE_VIDEO) );
-            assert( (pCtx_->nb_streams == 1) && (pStr == pCtx_->streams[0]) );
-            LOGD("StreamWriter: Opened ", *pStr);
-#ifndef NDEBUG
-            avtools::dumpStreamInfo(pCtx_.get(), 0, true);
-#endif
-            // Write stream header
-            int ret = avformat_write_header(pCtx_.get(), nullptr);
-            if (ret < 0)
+    public:
+        /// Opens and returns a handle to the implementation
+        /// @param[in] dict a dictionary to read format/codec parameters from
+        /// @return a handle to the imlementation
+        static std::unique_ptr<Implementation> Open(const AVDictionary& dict)
+        {
+            avdevice_register_all();    // Register devices
+            //Init outout format context, open output file or stream
+            AVFormatContext* pCtx = nullptr;
+            AVOutputFormat *pFormat = nullptr;
+            // Get the input format
+            const AVDictionaryEntry* pContainer = av_dict_get(&dict, "container", nullptr, 0);
+            if (pContainer)
             {
-                close();
-                throw StreamError("Error occurred when writing output stream header.", ret);
+                pFormat = av_guess_format(pContainer->value, nullptr, nullptr);
             }
-            LOGD("StreamWriter: Opened output stream ", pCtx_->filename);
-#ifndef NDEBUG
-            avtools::dumpContainerInfo(pCtx_.get(), true);
-#endif
+            const AVDictionaryEntry* pUrl = av_dict_get(&dict, "url", nullptr, 0);
+            assert(pUrl);    //url must be provided
+            AVDictionary* pDict = nullptr;
+            int status = av_dict_copy(&pDict, &dict, 0);
+            if (status < 0)
+            {
+                throw StreamError("Unable to clone input dictionary.");
+            }
+
+            status = avformat_alloc_output_context2(&pCtx, pFormat, nullptr, pUrl->value);
+            if (status < 0)
+            {
+                throw StreamError("Unable to allocate output context.", status);
+            }
+            assert(pCtx);
+            if ( !(pCtx->flags & AVFMT_NOFILE) )
+            {
+                status = avio_open2(&pCtx->pb, pUrl->value, AVIO_FLAG_WRITE, nullptr, &pDict);
+                if (status < 0)
+                {
+                    throw StreamError("Could not open " + std::string(pUrl->value), status);
+                }
+                assert(pCtx->pb);
+            }
+            LOGD("StreamWriter: Opened output stream ", pUrl->value, " in ", pCtx->oformat->long_name, " format.");
+            return std::make_unique<Implementation>(FormatContextHandle(pCtx, [](AVFormatContext* pp) {avformat_free_context(pp); }));
+
+
+            ////////////
+            //        av_register_all();          // Register codecs - his is deprecated for ffmpeg >4.0
+            AVFormatContext* p = nullptr;
+            AVInputFormat *pFormat = nullptr;
+            // Get the input format
+            const AVDictionaryEntry* pDriver = av_dict_get(&dict, "driver", nullptr, 0);
+            if (pDriver)
+            {
+                pFormat = av_find_input_format(pDriver->value);
+            }
+            
+            assert(av_dict_get(&dict, "url", nullptr, 0));    //url must be provided
+            const char* url = av_dict_get(&dict, "url", nullptr, 0)->value;
+            AVDictionary* pDict = nullptr;
+            int status = av_dict_copy(&pDict, &dict, 0);
+            if (status < 0)
+            {
+                throw StreamError("Unable to clone input dictionary.");
+            }
+            
+            status = avformat_open_input( &p, url, pFormat, &pDict );
+            if( status < 0 )  // Couldn't open file
+            {
+                throw StreamError("Could not open " + std::string(url), status);
+            }
+
+            return std::make_unique<Implementation>(dict);
         }
         
+        static std::unique_ptr<Implementation> Open(
+            const std::string& url,
+            const AVCodecParameters& codecParam,
+            const TimeBaseType& timebase,
+            bool allowExperimentalCodecs=false
+        )
+        {
+            AVDictionary* pOpts = nullptr;
+            int ret = av_dict_set(&pOpts, "url", url.c_str(), 0);
+            if (ret < 0)
+            {
+                throw StreamError("Unable to set url in dictionary. ", ret);
+            }
+            
+            avtools::Handle<AVDictionary> hDict(pOpts, [](AVDictionary* p){if (p) av_dict_free(&p);});
+            return Open(*pOpts);
+        }
+
         /// Dtor
         ~Implementation()
         {
-            assert(hCtx_);
-            //pop all delayed packets from encoder
-            LOGD("StreamWriter: Flushing delayed packets from encoders.");
-            try
-            {
-                write(nullptr);
-            }
-            catch (std::exception& err)
-            {
-                LOGE("Error flushing packets and closing encoder: ", err.what())
-            }
-            //Write trailer
-            av_write_trailer(hCtx_.get());
-#ifndef NDEBUG
-            avtools::dumpContainerInfo(hCtx_.get(), true);
-#endif
-            LOGD("StreamWriter: Closing stream.");
-        
-            // Close file if output is file
-            if ( !(hCtx_->oformat->flags & AVFMT_NOFILE) )
-            {
-                avio_close(hCtx_->pb);
-            }
+            close();
         }
         
         /// @return list of opened streams in the output file
         inline const AVStream* stream() const
         {
-            assert(pCtx_ && (pCtx_->nb_streams == 1) );
-            return pCtx_->streams[0];
+            assert(hCtx_ && (hCtx_->nb_streams == 1) );
+            return hCtx_->streams[0];
         }
         
         /// Writes a frame to a particular stream.
@@ -488,25 +389,25 @@ namespace avtools
                 ret = avcodec_receive_packet(hCC_.get(), hPkt_.get());
                 if (ret == AVERROR(EAGAIN))
                 {
-                    break;
+                    break;  //need to write more frames to get packets
                 }
                 else if (ret == AVERROR_EOF)
                 {
-                    break;
+                    break;  //end of file
                 }
                 else if (ret < 0)
                 {
                     throw StreamError("Error reading packets from encoder", ret);
                 }
                 //Write packet to file
-                pkt_->dts = AV_NOPTS_VALUE;  //let the muxer figure this out
-                pkt_->stream_index = 0;
-                pkt_->pts = av_rescale_q(pkt_->pts, hCC_->time_base, stream()->time_base);   //this is necessary since writing the header can change the time_base of the stream.
+                hPkt_->dts = AV_NOPTS_VALUE;  //let the muxer figure this out
+                hPkt_->stream_index = 0;
+                hPkt_->pts = av_rescale_q(hPkt_->pts, hCC_->time_base, stream()->time_base);   //this is necessary since writing the header can change the time_base of the stream.
 //                LOGD("Muxing packet for ", *pCtx_->streams[stream]);
 //                LOGD("\tpts = ", pkt->pts, ", time_base = ", pCtx_->streams[stream]->time_base, ";\ttime(s) = ", avtools::calculateTime(pkt->pts, pCtx_->streams[stream]->time_base));
         
                 //mux encoded frame
-                ret = av_interleaved_write_frame(pCtx_.get(), pkt_);
+                ret = av_interleaved_write_frame(hCtx_.get(), hPkt_.get());
                 if (ret < 0)
                 {
                     throw StreamError("Error muxing packet", ret);
@@ -524,14 +425,20 @@ namespace avtools
     //=====================================================
     
     StreamWriter::StreamWriter(
-        const std::string& url, 
+        const std::string& url,
         const AVCodecParameters& codecParam, 
         const TimeBaseType& timebase, 
-        bool allowExperimentalCodecs=false
+        bool allowExperimentalCodecs
     ):
-    pImpl_( new Implementation(url, codecParam, timebase, allowExperimentalCodecs) )
+    pImpl_( Implementation::Open(url, codecParam, timebase, allowExperimentalCodecs) )
     {
         assert ( pImpl_ );
+    }
+    
+    StreamWriter::StreamWriter(const AVDictionary& dict):
+    pImpl_ (Implementation::Open(dict))
+    {
+        assert( pImpl_);
     }
 
     StreamWriter::~StreamWriter() = default;
@@ -540,22 +447,36 @@ namespace avtools
         const std::string& url, 
         const AVCodecParameters& codecParam, 
         const TimeBaseType& timebase, 
-        bool allowExperimentalCodecs=false
+        bool allowExperimentalCodecs
     ) noexcept
     {
         try
         {
-            Handle h(new StreamWriter(filename));
+            Handle h(new StreamWriter(url, codecParam, timebase, allowExperimentalCodecs));
             assert(h);
             return h;
         }
         catch (std::exception& err)
         {
-            LOGE("StreamWriter: Unable to open ", url, "\n", err.what());
+            LOGE("StreamWriter: Unable to open ", url, ":", err.what());
             return nullptr;
         }
     }
         
+    StreamWriter::Handle StreamWriter::Open(const AVDictionary& dict) noexcept
+    {
+        try
+        {
+            Handle h(new StreamWriter(dict));
+            assert(h);
+            return h;
+        }
+        catch (std::exception& err)
+        {
+            LOGE("StreamWriter: Unable to open streamwriter: ", err.what());
+            return nullptr;
+        }
+    }
     const AVStream* StreamWriter::getStream() const
     {
         assert(pImpl_);
@@ -578,7 +499,7 @@ namespace avtools
         }
         catch (std::exception& e)
         {
-            std::throw_with_nested(StreamError("StreamWriter: Error writing to stream " + std::to_string(stream)));
+            std::throw_with_nested(StreamError("StreamWriter: Error writing to video stream "));
         }
     }
 }   //::ski

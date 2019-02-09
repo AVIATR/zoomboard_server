@@ -7,7 +7,7 @@
 //
 
 #include "Transcoder.hpp"
-#include "Stream.hpp"
+#include "Media.hpp"
 #include <stdexcept>
 #include "log.hpp"
 
@@ -59,25 +59,25 @@ namespace avtools
         {
             if ( !hInParam_ || !hOutParam_)
             {
-                throw StreamError("Unable to clone codec parameters");
+                throw MediaError("Unable to clone codec parameters");
             }
             if ( !hConvCtx_ )
             {
-                throw StreamError("Unable to allocate conversion context");
+                throw MediaError("Unable to allocate conversion context");
             }
             if ( !hFrameOut_ )
             {
-                throw StreamError("Unable to allocate frame");
+                throw MediaError("Unable to allocate frame");
             }
             assert ((hFrameOut_->width == outParam.width) && (hFrameOut_->height == outParam.height));
             assert (hFrameOut_->format == outParam.format);
             if (0 == sws_isSupportedInput((AVPixelFormat) inParam.format))
             {
-                throw StreamError("Unsupported input pixel format " + std::to_string(inParam.format));
+                throw MediaError("Unsupported input pixel format " + std::to_string(inParam.format));
             }
             if (0 == sws_isSupportedOutput((AVPixelFormat) outParam.format))
             {
-                throw StreamError("Unsupported output pixel format " + std::to_string(outParam.format));
+                throw MediaError("Unsupported output pixel format " + std::to_string(outParam.format));
             }
         }
         
@@ -89,7 +89,7 @@ namespace avtools
             int ret = sws_scale(hConvCtx_.get(), pFIn->data, pFIn->linesize, 0, pFIn->height, hFrameOut_->data, hFrameOut_->linesize);
             if (ret < 0)
             {
-                throw StreamError("Error converting frame to output format.", ret);
+                throw MediaError("Error converting frame to output format.", ret);
             }
             return hFrameOut_.get();
         }
@@ -108,7 +108,7 @@ namespace avtools
     }
     catch (std::exception& err)
     {
-        std::throw_with_nested( StreamError("Transcoder: Unable to open transcoder.") );
+        std::throw_with_nested( MediaError("Transcoder: Unable to open transcoder.") );
     }
 
     Transcoder::~Transcoder() = default;
@@ -122,7 +122,7 @@ namespace avtools
         }
         catch (std::exception& err)
         {
-            std::throw_with_nested( StreamError("Transcoder: Error converting frame.") );
+            std::throw_with_nested( MediaError("Transcoder: Error converting frame.") );
         }
     }
 }   //::avtools

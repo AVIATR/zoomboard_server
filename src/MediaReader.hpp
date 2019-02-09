@@ -6,11 +6,12 @@
 //  Copyright (c) 2014 Smith-Kettlewell. All rights reserved.
 //
 
-#ifndef __StreamReader_hpp__
-#define __StreamReader_hpp__
+#ifndef __MediaReader_hpp__
+#define __MediaReader_hpp__
 
 #include <memory>
 #include <string>
+#include "LibAVWrappers.hpp"
 
 struct AVFrame;
 struct AVStream;
@@ -20,24 +21,31 @@ namespace avtools
 {
     /// @class opens a multimedia file for input
     /// See https://ffmpeg.org/doxygen/2.4/demuxing_decoding_8c-example.html#_a19
-    class StreamReader
+    class MediaReader
     {
     public:
-        typedef std::unique_ptr<StreamReader> Handle;   ///< handle to mmreader
+        typedef std::unique_ptr<MediaReader> Handle;   ///< handle to mediareader
 
         /// Ctor that opens a file
         /// @param[in] url url of media file to open
         /// @throw std::runtime_exception if there was an error opening the stream.
-        StreamReader(const std::string& url);
+        MediaReader(const std::string& url);
 
         /// More general ctor
         /// @param[in, out] opts stream options to use, such as url, resolution & frame rate.
         /// On return, this dictionary should contain the actual values used in opening.
         /// @throw std::runtime_exception if there was an error opening the stream.
-        StreamReader(const AVDictionary& opts);
+        [[deprecated]]
+        MediaReader(const AVDictionary& opts);
 
+        /// More general ctor
+        /// @param[in, out] opts stream options to use, such as url, resolution & frame rate.
+        /// On return, this dictionary should contain the actual values used in opening.
+        /// @throw std::runtime_exception if there was an error opening the stream.
+        MediaReader(const Dict& opts);
+        
         /// Dtor
-        ~StreamReader();
+        ~MediaReader();
         
         /// Opens a new file for reading
         /// @param[in] fileName name of file to open
@@ -54,6 +62,8 @@ namespace avtools
         /// @return a new handle to the multimedia reader for the opened file, nullptr if a file could not be opened.
         static Handle Open(const AVDictionary& opts) noexcept;
 
+        static Handle Open(Dict& opts) noexcept;
+
         /// @return the first opened video stream
         const AVStream* getVideoStream() const;
         
@@ -66,8 +76,8 @@ namespace avtools
     private:
         class Implementation;
         std::unique_ptr<Implementation> pImpl_;
-    };  //avtools::StreamReader
+    };  //avtools::MediaReader
     
 } //::avtools
 
-#endif /* defined(__StreamReader_hpp__) */
+#endif /* defined(__MediaReader_hpp__) */

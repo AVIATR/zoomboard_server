@@ -1,12 +1,12 @@
 //
-//  StreamWriter.cpp
+//  MediaWriter.cpp
 //  MM
 //
 //  Created by Ender Tekin on 11/12/14.
 //
 //
 
-#include "StreamWriter.hpp"
+#include "MediaWriter.hpp"
 #include "log.hpp"
 #include <string>
 
@@ -20,10 +20,10 @@ namespace avtools
 {
     //=====================================================
     //
-    //StreamWriter Implementation
+    //MediaWriter Implementation
     //
     //=====================================================
-    class StreamWriter::Implementation
+    class MediaWriter::Implementation
     {
     private:
         FormatContextHandle                 hCtx_;      ///< format context for the output file
@@ -36,7 +36,7 @@ namespace avtools
             if (hCtx_)
             {
                 //pop all delayed packets from encoder
-                LOGD("StreamWriter: Flushing delayed packets from encoders.");
+                LOGD("MediaWriter: Flushing delayed packets from encoders.");
                 try
                 {
                     write(nullptr);
@@ -50,7 +50,7 @@ namespace avtools
 #ifndef NDEBUG
                 avtools::dumpContainerInfo(hCtx_.get(), true);
 #endif
-                LOGD("StreamWriter: Closing stream.");
+                LOGD("MediaWriter: Closing stream.");
                 
                 // Close file if output is file
                 if ( !(hCtx_->oformat->flags & AVFMT_NOFILE) )
@@ -77,7 +77,7 @@ namespace avtools
 ////            av_register_all();
 //            if (!hCtx_ || !hCC_ || !hPkt_)
 //            {
-//                throw StreamError("Unable to allocate contexts.");
+//                throw MediaError("Unable to allocate contexts.");
 //            }
 //            avtools::initPacket(hPkt_);
 //
@@ -87,11 +87,11 @@ namespace avtools
 //                int ret = avio_open(&hCtx_->pb, url.c_str(), AVIO_FLAG_WRITE);
 //                if (ret < 0)
 //                {
-//                    throw StreamError("Could not open " + url, ret);
+//                    throw MediaError("Could not open " + url, ret);
 //                }
 //                assert(hCtx_->pb);
 //            }
-//            LOGD("StreamWriter: Opened output stream ", url, " in ", hCtx_->oformat->long_name, " format.");
+//            LOGD("MediaWriter: Opened output stream ", url, " in ", hCtx_->oformat->long_name, " format.");
 //
 //            //Add the video stream to the output context
 //            // Ensure that the provided container can contain the requested output codec
@@ -103,20 +103,20 @@ namespace avtools
 //            int ret = avformat_query_codec(pOutFormat, codecId, compliance);
 //            if ( ret <= 0 )
 //            {
-//                throw StreamError("File format " + std::string(pOutFormat->name) + " is unable to store " + std::to_string(codecId) + " streams.", ret);
+//                throw MediaError("File format " + std::string(pOutFormat->name) + " is unable to store " + std::to_string(codecId) + " streams.", ret);
 //            }
 //
 //            // Find encoder
 //            const AVCodec* pEncoder = avcodec_find_encoder(codecId);
 //            if (!pEncoder)
 //            {
-//                throw StreamError("Cannot find an encoder for " + std::to_string(codecId));
+//                throw MediaError("Cannot find an encoder for " + std::to_string(codecId));
 //            }
 //            // Set up encoder context
 //            ret = avcodec_parameters_to_context(hCC_.get(), &codecParam);
 //            if (ret < 0)
 //            {
-//                throw StreamError("Unable to copy codec parameters to encoder context.", ret);
+//                throw MediaError("Unable to copy codec parameters to encoder context.", ret);
 //            }
 //            AVDictionary *opts = nullptr;
 //
@@ -187,7 +187,7 @@ namespace avtools
 //            ret = avcodec_open2(hCC_.get(), pEncoder, &opts);
 //            if (ret < 0)
 //            {
-//                throw StreamError("Unable to open encoder for codec " + std::to_string(codecId), ret);
+//                throw MediaError("Unable to open encoder for codec " + std::to_string(codecId), ret);
 //            }
 //            assert( avcodec_is_open(hCC_.get()) );
 //            LOGD("StreamEncoder: Opened encoder for ", avtools::getCodecInfo(hCC_.get()));
@@ -196,7 +196,7 @@ namespace avtools
 //            AVStream* pStr = avformat_new_stream(hCtx_.get(), pEncoder);
 //            if ( !pStr )
 //            {
-//                throw StreamError("Unable to add stream for " + std::to_string(codecId));
+//                throw MediaError("Unable to add stream for " + std::to_string(codecId));
 //            }
 //
 //            //copy codec params to stream
@@ -205,15 +205,15 @@ namespace avtools
 //
 //            assert( pStr->codecpar && (pStr->codecpar->codec_id == codecId) && (pStr->codecpar->codec_type == AVMEDIA_TYPE_VIDEO) );
 //            assert( (hCtx_->nb_streams == 1) && (pStr == hCtx_->streams[0]) );
-//            LOGD("StreamWriter: Opened ", *pStr);
+//            LOGD("MediaWriter: Opened ", *pStr);
 //            // Write stream header
 //            ret = avformat_write_header(hCtx_.get(), nullptr);
 //            if (ret < 0)
 //            {
 //                close();
-//                throw StreamError("Error occurred when writing output stream header.", ret);
+//                throw MediaError("Error occurred when writing output stream header.", ret);
 //            }
-//            LOGD("StreamWriter: Opened output container ", hCtx_->url);
+//            LOGD("MediaWriter: Opened output container ", hCtx_->url);
 //#ifndef NDEBUG
 //            avtools::dumpContainerInfo(hCtx_.get(), true);
 //#endif
@@ -225,7 +225,7 @@ namespace avtools
         {
             if (!hCtx_ || !hCC_ || !hPkt_)
             {
-                throw StreamError("Unable to allocate contexts.");
+                throw MediaError("Unable to allocate contexts.");
             }
             avtools::initPacket(hPkt_);
 
@@ -239,20 +239,20 @@ namespace avtools
             int ret = avformat_query_codec(pOutFormat, codecId, compliance);
             if ( ret <= 0 )
             {
-                throw StreamError("File format " + std::string(pOutFormat->name) + " is unable to store " + std::to_string(codecId) + " streams.", ret);
+                throw MediaError("File format " + std::string(pOutFormat->name) + " is unable to store " + std::to_string(codecId) + " streams.", ret);
             }
 
             // Find encoder
             const AVCodec* pEncoder = avcodec_find_encoder(codecId);
             if (!pEncoder)
             {
-                throw StreamError("Cannot find an encoder for " + std::to_string(codecId));
+                throw MediaError("Cannot find an encoder for " + std::to_string(codecId));
             }
             // Set up encoder context
             ret = avcodec_parameters_to_context(hCC_.get(), &codecParam);
             if (ret < 0)
             {
-                throw StreamError("Unable to copy codec parameters to encoder context.", ret);
+                throw MediaError("Unable to copy codec parameters to encoder context.", ret);
             }
             AVDictionary *opts = nullptr;
 
@@ -284,13 +284,13 @@ namespace avtools
             int status = av_dict_copy(&pDict, &dict, 0);
             if (status < 0)
             {
-                throw StreamError("Unable to clone input dictionary.");
+                throw MediaError("Unable to clone input dictionary.");
             }
 
             status = avformat_alloc_output_context2(&pCtx, pFormat, nullptr, pUrl->value);
             if (status < 0)
             {
-                throw StreamError("Unable to allocate output context.", status);
+                throw MediaError("Unable to allocate output context.", status);
             }
             assert(pCtx);
             if ( !(pCtx->flags & AVFMT_NOFILE) )
@@ -298,11 +298,11 @@ namespace avtools
                 status = avio_open2(&pCtx->pb, pUrl->value, AVIO_FLAG_WRITE, nullptr, &pDict);
                 if (status < 0)
                 {
-                    throw StreamError("Could not open " + std::string(pUrl->value), status);
+                    throw MediaError("Could not open " + std::string(pUrl->value), status);
                 }
                 assert(pCtx->pb);
             }
-            LOGD("StreamWriter: Opened output stream ", pUrl->value, " in ", pCtx->oformat->long_name, " format.");
+            LOGD("MediaWriter: Opened output stream ", pUrl->value, " in ", pCtx->oformat->long_name, " format.");
             return std::make_unique<Implementation>(FormatContextHandle(pCtx, [](AVFormatContext* pp) {avformat_free_context(pp); }));
 
 
@@ -323,13 +323,13 @@ namespace avtools
             int status = av_dict_copy(&pDict, &dict, 0);
             if (status < 0)
             {
-                throw StreamError("Unable to clone input dictionary.");
+                throw MediaError("Unable to clone input dictionary.");
             }
             
             status = avformat_open_input( &p, url, pFormat, &pDict );
             if( status < 0 )  // Couldn't open file
             {
-                throw StreamError("Could not open " + std::string(url), status);
+                throw MediaError("Could not open " + std::string(url), status);
             }
 
             return std::make_unique<Implementation>(dict);
@@ -346,7 +346,7 @@ namespace avtools
             int ret = av_dict_set(&pOpts, "url", url.c_str(), 0);
             if (ret < 0)
             {
-                throw StreamError("Unable to set url in dictionary. ", ret);
+                throw MediaError("Unable to set url in dictionary. ", ret);
             }
             
             avtools::Handle<AVDictionary> hDict(pOpts, [](AVDictionary* p){if (p) av_dict_free(&p);});
@@ -376,11 +376,11 @@ namespace avtools
             {
                 if (pFrame)
                 {
-                    throw StreamError("Error sending frames to encoder", ret);
+                    throw MediaError("Error sending frames to encoder", ret);
                 }
                 else
                 {
-                    throw StreamError("Error flushing encoder", ret);
+                    throw MediaError("Error flushing encoder", ret);
                 }
             }
             avtools::unrefPacket(hPkt_);
@@ -397,7 +397,7 @@ namespace avtools
                 }
                 else if (ret < 0)
                 {
-                    throw StreamError("Error reading packets from encoder", ret);
+                    throw MediaError("Error reading packets from encoder", ret);
                 }
                 //Write packet to file
                 hPkt_->dts = AV_NOPTS_VALUE;  //let the muxer figure this out
@@ -410,21 +410,21 @@ namespace avtools
                 ret = av_interleaved_write_frame(hCtx_.get(), hPkt_.get());
                 if (ret < 0)
                 {
-                    throw StreamError("Error muxing packet", ret);
+                    throw MediaError("Error muxing packet", ret);
                 }
             }
 //            av_log_set_level(AV_LOG_WARNING);
         }
         
-    };  //::avtools::StreamWriter::Implementation
+    };  //::avtools::MediaWriter::Implementation
     
     //=====================================================
     //
-    //StreamWriter Definitions
+    //MediaWriter Definitions
     //
     //=====================================================
     
-    StreamWriter::StreamWriter(
+    MediaWriter::MediaWriter(
         const std::string& url,
         const AVCodecParameters& codecParam, 
         const TimeBaseType& timebase, 
@@ -435,15 +435,15 @@ namespace avtools
         assert ( pImpl_ );
     }
     
-    StreamWriter::StreamWriter(const AVDictionary& dict):
+    MediaWriter::MediaWriter(const AVDictionary& dict):
     pImpl_ (Implementation::Open(dict))
     {
         assert( pImpl_);
     }
 
-    StreamWriter::~StreamWriter() = default;
+    MediaWriter::~MediaWriter() = default;
 
-    StreamWriter::Handle StreamWriter::Open(
+    MediaWriter::Handle MediaWriter::Open(
         const std::string& url, 
         const AVCodecParameters& codecParam, 
         const TimeBaseType& timebase, 
@@ -452,38 +452,38 @@ namespace avtools
     {
         try
         {
-            Handle h(new StreamWriter(url, codecParam, timebase, allowExperimentalCodecs));
+            Handle h(new MediaWriter(url, codecParam, timebase, allowExperimentalCodecs));
             assert(h);
             return h;
         }
         catch (std::exception& err)
         {
-            LOGE("StreamWriter: Unable to open ", url, ":", err.what());
+            LOGE("MediaWriter: Unable to open ", url, ":", err.what());
             return nullptr;
         }
     }
         
-    StreamWriter::Handle StreamWriter::Open(const AVDictionary& dict) noexcept
+    MediaWriter::Handle MediaWriter::Open(const AVDictionary& dict) noexcept
     {
         try
         {
-            Handle h(new StreamWriter(dict));
+            Handle h(new MediaWriter(dict));
             assert(h);
             return h;
         }
         catch (std::exception& err)
         {
-            LOGE("StreamWriter: Unable to open streamwriter: ", err.what());
+            LOGE("MediaWriter: Unable to open MediaWriter: ", err.what());
             return nullptr;
         }
     }
-    const AVStream* StreamWriter::getStream() const
+    const AVStream* MediaWriter::getStream() const
     {
         assert(pImpl_);
         return pImpl_->stream();
     }
     
-    void StreamWriter::write(const AVFrame* pFrame)
+    void MediaWriter::write(const AVFrame* pFrame)
     {
         assert( pImpl_ );
         try
@@ -499,7 +499,7 @@ namespace avtools
         }
         catch (std::exception& e)
         {
-            std::throw_with_nested(StreamError("StreamWriter: Error writing to video stream "));
+            std::throw_with_nested(MediaError("MediaWriter: Error writing to video stream "));
         }
     }
 }   //::ski

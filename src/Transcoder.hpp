@@ -10,6 +10,7 @@
 #define __Transcoder_hpp__
 
 #include <memory>
+#include "LibAVWrappers.hpp"
 
 struct AVFrame;
 struct AVCodecParameters;
@@ -34,6 +35,7 @@ namespace avtools
         /// @return transcoded frame
         /// @throw StreamError if there are issues with transcoding
         const AVFrame* convert(const AVFrame* pFrame);
+
         
     private:
         class Implementation;                           ///< Implementation class

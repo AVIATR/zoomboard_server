@@ -10,9 +10,10 @@
 #include <string>
 #include <vector>
 #include "version.h"
-#include "StreamReader.hpp"
-#include "StreamWriter.hpp"
-#include "Stream.hpp"
+#include "MediaReader.hpp"
+#include "MediaWriter.hpp"
+#include "Media.hpp"
+#include "Transcoder.hpp"
 #include "log.hpp"
 //#include "opencv2/core/core.hpp"
 //#include "opencv2/imgproc/imgproc.hpp"
@@ -28,7 +29,7 @@ extern "C" {
 #include <libavutil/avutil.h>
 }
 
-using avtools::StreamError;
+using avtools::MediaError;
 namespace
 {
     /// @class A structure containing the pertinent ffmpeg options
@@ -46,16 +47,6 @@ namespace
     /// @return a structure containing the ffmpeg options to use
     /// @throw std::runtime_error if there is an issue parsing the configuration file.
     Options getOptions(const std::string& configFile);
-    
-    /// Gets the requested input parameters from the options
-    /// @param[in] opts options retrieved from the configuration file
-    /// @return codec parameters to use when opening the input stream
-    avtools::Handle<AVDictionary> getInputParams(const Options& opts);
-
-    /// Gets the requested output parameters from the options
-    /// @param[in] opts options retrieved from the configuration file
-    /// @return codec parameters to use when opening the output stream
-    AVCodecParameters getOutputParams(const Options& opts);
 
 } //::<anon>
 
@@ -65,6 +56,7 @@ namespace
 //  -hls_time 0.1 -hls_allow_cache 0 -an -preset ultrafast /mnt/hls/stream.m3u8
 int main(int argc, const char * argv[])
 {
+    // Parse command line arguments & load the config file
     if (argc != 2)
     {
         LOG("Incorrect number of arguments, must supply a json configuration file as input.");
@@ -74,16 +66,20 @@ int main(int argc, const char * argv[])
 
     const std::string configFile = argv[1];
     const Options opts = getOptions(configFile);
-    const auto inParams = getInputParams(opts);
-    const AVCodecParameters outParams = getOutputParams(opts);
     // -----------
     // Open the media reader
     // -----------
-    avtools::StreamReader reader(opts.inputDriver, opts.inputDevice, *inParams);
+    avtools::Dictionary inputOpts;
+    inputOpts.add("driver", opts.inputDriver);
+    inputOpts.add("framerate", opts.frameRate);
+    inputOpts.add("width", opts.resolution.width);
+    inputOpts.add("height", opts.resolution.height);
+
+    avtools::MediaReader reader(opts.inputDevice, inputOpts);
     const AVStream* pStr = reader.getVideoStream();
     if (!pStr)
     {
-        throw StreamError("Could not find any video streams that can be processed.");
+        throw std::runtime_error("Could not find any video streams that can be processed.");
     }
 
     // -----------
@@ -233,34 +229,4 @@ namespace
         return opts;
     }
     
-    avtools::Handle<AVDictionary> getInputParams(const Options& opts)
-    {
-        AVDictionary* inOpts = nullptr;
-        int ret = av_dict_set(&inOpts, "driver", opts.inputDriver.c_str(), 0);
-        if (ret < 0)
-        {
-            throw StreamError("Unable to set driver in input dictionary", ret);
-        }
-        ret = av_dict_set(&inOpts, "device", opts.inputDevice.c_str(), 0);
-        if (ret < 0)
-        {
-            throw StreamError("Unable to set device in input dictionary", ret);
-        }
-        ret = av_dict_set_int(&inOpts, "framerate", opts.frameRate, 0);
-        if (ret < 0)
-        {
-            throw StreamError("Unable to set framerate in input dictionary", ret);
-        }
-        ret = av_dict_set_int(&inOpts, "width", opts.resolution.width, 0);
-        if (ret < 0)
-        {
-            throw StreamError("Unable to set width in input dictionary", ret);
-        }
-        ret = av_dict_set_int(&inOpts, "height", opts.resolution.height, 0);
-        if (ret < 0)
-        {
-            throw StreamError("Unable to set height in input dictionary", ret);
-        }
-        return avtools::Handle<AVDictionary>(inOpts, [](AVDictionary* p){av_dict_free(&p); });
-    }
 }   //::<anon>

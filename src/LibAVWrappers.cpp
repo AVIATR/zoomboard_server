@@ -9,6 +9,10 @@
 #include "Media.hpp"
 #include "log.hpp"
 #include <sstream>
+extern "C" {
+#include <libavutil/frame.h>
+#include <libswscale/swscale.h>
+}
 
 #ifdef av_err2str
 #undef av_err2str
@@ -17,7 +21,7 @@
 
 namespace
 {
-    using avtools::StreamError;
+    using avtools::MediaError;
     
     void initVideoFrame(AVFrame* pFrame, int width, int height, AVPixelFormat format, AVColorSpace cs)
     {
@@ -32,7 +36,7 @@ namespace
         int ret = av_frame_get_buffer(pFrame, 0);
         if (ret < 0)
         {
-            throw StreamError("Error allocating data buffers for video frame", ret);
+            throw MediaError("Error allocating data buffers for video frame", ret);
         }
         LOGD("Allocated frame data at ", static_cast<void*>(pFrame->data), " with linesize = ", pFrame->linesize[0]);
     }
@@ -64,28 +68,28 @@ namespace avtools
     // AVFrame wrapper
     // -------------------------------------------------
 
-    Frame::Frame():
-    pFrame_(av_frame_alloc()),
-    type_(AVMediaType::AVMEDIA_TYPE_UNKNOWN)
+    Frame::Frame(AVFrame* pFrame, AVMediaType type):
+    pFrame_(pFrame ? pFrame : av_frame_alloc()),
+    type_(type)
     {
         if (!pFrame_)
         {
-            throw StreamError("Frame: Unable to allocate frame.");
+            throw MediaError("Frame: Unable to allocate frame data.");
         }
     }
-    
+
     Frame::Frame(int width, int height, AVPixelFormat format, AVColorSpace cs/*=AVColorSpace::AVCOL_SPC_RGB*/):
-    Frame()
+    Frame(nullptr, AVMediaType::AVMEDIA_TYPE_VIDEO)
     {
+        assert(pFrame_);
         try
         {
             initVideoFrame(pFrame_, width, height, format, cs);
-            type_ = AVMediaType::AVMEDIA_TYPE_VIDEO;
         }
         catch (std::exception& err)
         {
             av_frame_free(&pFrame_);
-            std::throw_with_nested(StreamError("Frame: Unable to initialize video frame."));
+            std::throw_with_nested(MediaError("Frame: Unable to initialize video frame."));
         }
     }
     
@@ -100,14 +104,14 @@ namespace avtools
                     initVideoFrame(pFrame_, cPar.width, cPar.height, (AVPixelFormat) cPar.format, cPar.color_space);
                     type_ = AVMediaType::AVMEDIA_TYPE_VIDEO;
                     break;
-                default:    //may implement other typews in the future
-                    throw std::invalid_argument("Frames of type " + std::to_string(cPar.codec_type) + " are not implemented.")
+                default:    //may implement other types in the future
+                    throw std::invalid_argument("Frames of type " + std::to_string(cPar.codec_type) + " are not implemented.");
             }
         }
         catch (std::exception& err)
         {
             av_frame_free(&pFrame_);
-            std::throw_with_nested(StreamError("Frame: Unable to initialize frame."));
+            std::throw_with_nested(MediaError("Frame: Unable to initialize frame."));
         }
     }
 
@@ -118,7 +122,7 @@ namespace avtools
         if (!pFrame_)
         {
             type_ = AVMediaType::AVMEDIA_TYPE_UNKNOWN;
-            throw StreamError("Frame: Unable to clone frame.");
+            throw MediaError("Frame: Unable to clone frame.");
         }
     }
     
@@ -140,9 +144,10 @@ namespace avtools
         int ret = av_frame_ref(pFrame_, frame.get());
         if (ret < 0)
         {
-            throw StreamError("Frame: Unable to add reference to frame.", ret);
+            throw MediaError("Frame: Unable to add reference to frame.", ret);
         }
         type_ = frame.type();
+        return *this;
     }
 
     std::string Frame::info(int indent/*=0*/) const
@@ -150,7 +155,7 @@ namespace avtools
         switch (type_)
         {
             case AVMEDIA_TYPE_VIDEO:
-                getVideoFrameInfo(pFrame_, indent);
+                return getVideoFrameInfo(pFrame_, indent);
                 break;
             default:    //may implement other typews in the future
                 throw std::invalid_argument("Frames of type " + std::to_string(type_) + " are not implemented.");
@@ -160,18 +165,21 @@ namespace avtools
     // -------------------------------------------------
     // AVPacket wrapper
     // -------------------------------------------------
-    Packet::Packet():
-    pPkt_(av_packet_alloc())
+    Packet::Packet(const AVPacket* pPkt/*=nullptr*/):
+    pPkt_(pPkt ? av_packet_clone(pPkt) : av_packet_alloc())
     {
         if (!pPkt_)
         {
-            throw StreamError("Packet: Unable to allocate packet");
+            throw MediaError("Packet: Unable to allocate or clone packet");
         }
-        av_init_packet(pPkt_);
-        pPkt_->data = nullptr;
-        pPkt_->size = 0;
+        if (!pPkt)  //freshly allocated packet
+        {
+            av_init_packet(pPkt_);
+            pPkt_->data = nullptr;
+            pPkt_->size = 0;
+        }
     }
-    
+
     Packet::~Packet()
     {
         if (pPkt_)
@@ -187,6 +195,77 @@ namespace avtools
     }
     
     // -------------------------------------------------
+    // AVDictionary wrapper
+    // -------------------------------------------------
+
+    Dictionary::~Dictionary()
+    {
+        if (pDict_)
+        {
+            av_dict_free(&pDict_);
+        }
+    }
+    
+    void Dictionary::add(const std::string& key, const std::string& value)
+    {
+        assert(pDict_);
+        int ret = av_dict_set(&pDict_, key.c_str(), value.c_str(), 0);
+        if (ret < 0)
+        {
+            throw MediaError("Unable to add key " + key + " to dictionary", ret);
+        }
+    }
+    
+    void Dictionary::add(const std::string& key, std::int64_t value)
+    {
+        assert(pDict_);
+        int ret = av_dict_set_int(&pDict_, key.c_str(), value, 0);
+        if (ret < 0)
+        {
+            throw MediaError("Unable to add key " + key + " to dictionary", ret);
+        }
+    }
+    
+    std::string Dictionary::at(const std::string& key) const
+    {
+        assert(pDict_);
+        AVDictionaryEntry *pEntry = av_dict_get(pDict_, key.c_str(), nullptr, 0);
+        if (!pEntry)
+        {
+            throw std::out_of_range("Key " + key + " not found in dictionary.");
+        }
+        return pEntry->value;
+    }
+    
+    std::string Dictionary::operator[](const std::string& key) const
+    {
+        return at(key);
+    }
+    
+    bool Dictionary::has(const std::string &key) const
+    {
+        assert(pDict_);
+        return av_dict_get(pDict_, key.c_str(), nullptr, 0);
+    }
+    
+    /// Clones a dictionary. Any entries in this dictionary are lost.
+    /// @param[in] dict source dictionary
+    Dictionary& Dictionary::operator=(const Dictionary& dict)
+    {
+        if (pDict_)
+        {
+            av_dict_free(&pDict_);
+            pDict_ = nullptr;
+        }
+        int ret = av_dict_copy(&pDict_, dict.get(), 0);
+        if (ret < 0)
+        {
+            throw MediaError("Unable to clone dictionary.");
+        }
+        return *this;
+    }
+
+    // -------------------------------------------------
     // AVCodecContext wrapper
     // -------------------------------------------------
     CodecContext::CodecContext(const AVCodec* pCodec/*=nullptr*/):
@@ -194,7 +273,7 @@ namespace avtools
     {
         if (!pCC_)
         {
-            throw StreamError("CodecContext: Unable to allocate codec context.");
+            throw MediaError("CodecContext: Unable to allocate codec context.");
         }
     }
     
@@ -212,7 +291,12 @@ namespace avtools
         auto param = CodecParameters(*this);
         return param.info(indent);
     }
-    
+
+    bool CodecContext::isOpen() const
+    {
+        return avcodec_is_open(pCC_);
+    }
+
     // -------------------------------------------------
     // AVCodecParameters wrapper
     // -------------------------------------------------
@@ -221,7 +305,7 @@ namespace avtools
     {
         if (!pParam_)
         {
-            throw StreamError("CodecParameters: Unable to allocate parameters.");
+            throw MediaError("CodecParameters: Unable to allocate parameters.");
         }
     }
     
@@ -230,7 +314,7 @@ namespace avtools
         int ret = avcodec_parameters_from_context(pParam_, pCC);
         if (ret < 0)
         {
-            throw StreamError("Unable to determine codec parameters from codec context", ret);
+            throw MediaError("Unable to determine codec parameters from codec context", ret);
         }
     }
     
@@ -240,7 +324,7 @@ namespace avtools
         int ret = avcodec_parameters_copy(pParam_, cp.get());
         if ( ret < 0 )
         {
-            throw StreamError("Unable to clone codec parameters", ret);
+            throw MediaError("Unable to clone codec parameters", ret);
         }
     }
 
@@ -249,8 +333,9 @@ namespace avtools
         int ret = avcodec_parameters_copy(pParam_, cp.get());
         if ( ret < 0 )
         {
-            throw StreamError("Unable to clone codec parameters", ret);
+            throw MediaError("Unable to clone codec parameters", ret);
         }
+        return *this;
     }
 
     CodecParameters::~CodecParameters()
@@ -285,15 +370,22 @@ namespace avtools
     // -------------------------------------------------
     // AVFormatContext wrapper
     // -------------------------------------------------
-    FormatContext::FormatContext():
-    pCtx_(<#args#>)
+    FormatContext::FormatContext(Type t):
+    pCtx_(avformat_alloc_context()),
+    type(t)
     {
-        
+        if (!pCtx_)
+        {
+            throw MediaError("Unable to allocate format context.");
+        }
     }
     
     FormatContext::~FormatContext()
     {
-        
+        if (pCtx_)
+        {
+            avformat_free_context(pCtx_);
+        }
     }
     
     int FormatContext::nStreams() const noexcept
@@ -322,7 +414,7 @@ namespace avtools
         return pCtx_->streams[n];
     }
 
-    void FormatContext::dumpStreamInfo(int n, FormatContext::Type type)
+    void FormatContext::dumpStreamInfo(int n)
     {
         assert(pCtx_);
         if ( (n < 0) && (n >= pCtx_->nb_streams) )
@@ -335,7 +427,7 @@ namespace avtools
         av_log_set_level(level);
     }
     
-    void FormatContext::dumpContainerInfo(FormatContext::Type type)
+    void FormatContext::dumpContainerInfo()
     {
         assert(pCtx_);
         const int level = av_log_get_level();
@@ -364,65 +456,31 @@ namespace avtools
     }
 
     // -------------------------------------------------
-    // AVDictionary wrapper
+    // SwsContext wrapper
     // -------------------------------------------------
-    
-    Dict::~Dict()
+    ImageConversionContext::ImageConversionContext(const AVCodecParameters& inParam, const AVCodecParameters& outParam):
+    ImageConversionContext(inParam.width, inParam.height, (AVPixelFormat) inParam.format,
+                           outParam.width, outParam.height, (AVPixelFormat) outParam.format)
     {
-        if (pDict_)
+        assert((inParam.codec_type == AVMEDIA_TYPE_VIDEO) && (outParam.codec_type == AVMEDIA_TYPE_VIDEO));
+    }
+
+    ImageConversionContext::ImageConversionContext
+    (int inW, int inH, AVPixelFormat inFmt, int outW, int outH, AVPixelFormat outFmt):
+    pConvCtx_(sws_getContext(inW, inH, inFmt, outW, outH, outFmt, 0, nullptr, nullptr, nullptr))//flags = 0, srcfilter=dstfilter=nullptr, param=nullptr
+    {
+        if (!pConvCtx_)
         {
-            av_dict_free(&pDict_);
+            throw MediaError("ImageConversionContext: Unable to initialize scaling context.");
         }
     }
-    
-    void Dict::add(const std::string& key, const std::string& value)
+
+    ImageConversionContext::~ImageConversionContext()
     {
-        int ret = av_dict_set(&pDict_, key.c_str(), value.c_str(), 0);
-        if (ret < 0)
+        if (pConvCtx_)
         {
-            throw StreamError("Unable to add key " + key + " to dictionary", ret);
+            sws_freeContext(pConvCtx_);
         }
-    }
-    
-    void Dict::add(const std::string& key, std::int64_t value)
-    {
-        int ret = av_dict_set_int(&pDict_, key.c_str(), value, 0);
-        if (ret < 0)
-        {
-            throw StreamError("Unable to add key " + key + " to dictionary", ret);
-        }
-    }
-    
-    std::string Dict::at(const std::string& key) const
-    {
-        AVDictionaryEntry *pEntry = av_dict_get(pDict_, key.c_str(), nullptr, 0);
-        if (!pEntry)
-        {
-            throw std::out_of_range("Key " + key + " not found in dictionary.");
-        }
-        return pEntry->value;
-    }
-    
-    std::string Dict::operator[](const std::string& key) const
-    {
-        return at(key);
-    }
-    
-    /// Clones a dictionary. Any entries in this dictionary are lost.
-    /// @param[in] dict source dictionary
-    Dict& Dict::operator=(const Dict& dict)
-    {
-        if (pDict_)
-        {
-            av_dict_free(&pDict_);
-            pDict_ = nullptr;
-        }
-        int ret = av_dict_copy(&pDict_, dict.get(), 0);
-        if (ret < 0)
-        {
-            throw StreamError("Unable to clone dictionary.");
-        }
-        return *this;
     }
 
 }

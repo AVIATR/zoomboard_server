@@ -8,31 +8,15 @@
 
 #include "Transcoder.hpp"
 #include "Media.hpp"
+#include "LibAVWrappers.hpp"
 #include <stdexcept>
 #include "log.hpp"
 
 extern "C" {
 #include <libavformat/avformat.h>
 #include <libavcodec/avcodec.h>
-#include <libavutil/pixdesc.h>
-#include <libavutil/frame.h>
 #include <libswscale/swscale.h>
 }
-
-namespace
-{
-    typedef avtools::Handle<SwsContext> ConversionContextHandle;
-    ConversionContextHandle allocateConversionContext(const AVCodecParameters& inParam, const AVCodecParameters& outParam)
-    {
-        return ConversionContextHandle
-        (
-         sws_getContext(inParam.width, inParam.height, (AVPixelFormat) inParam.format,
-                        outParam.width, outParam.height, (AVPixelFormat) outParam.format,
-                        0, nullptr, nullptr, nullptr),  //flags = 0, srcfilter=dstfilter=nullptr, param=nullptr
-         [](SwsContext* p){sws_freeContext(p);}
-        );
-    }
-}   //::<anon>
 
 namespace avtools
 {
@@ -46,31 +30,19 @@ namespace avtools
     class Transcoder::Implementation
     {
     private:
-        CodecParametersHandle   hInParam_;      ///< Input codec parameters
-        CodecParametersHandle   hOutParam_;     ///< Output codec parameters
-        ConversionContextHandle hConvCtx_;      ///< Conversion context handle
-        FrameHandle             hFrameOut_;     ///< Handle to frame holding transcoded frame data
+        ImageConversionContext      convCtx_;       ///< Conversion context
+        Frame                       frame_;         ///< Frame holding transcoded frame data
+//        AVCodecParameters           inParam_;       ///< Input codec parameters
+//        AVCodecParameters           outParam_;      ///< Output codec parameters
     public:
         Implementation(const AVCodecParameters& inParam, const AVCodecParameters& outParam):
-            hInParam_( cloneCodecParameters(inParam) ),
-            hOutParam_( cloneCodecParameters(outParam) ),
-            hConvCtx_( allocateConversionContext(inParam, outParam) ),
-            hFrameOut_( allocateFrame(outParam) )
+        convCtx_(inParam, outParam),
+        frame_(outParam)
+//        inParam_( inParam ),
+//        outParam_( outParam )
         {
-            if ( !hInParam_ || !hOutParam_)
-            {
-                throw MediaError("Unable to clone codec parameters");
-            }
-            if ( !hConvCtx_ )
-            {
-                throw MediaError("Unable to allocate conversion context");
-            }
-            if ( !hFrameOut_ )
-            {
-                throw MediaError("Unable to allocate frame");
-            }
-            assert ((hFrameOut_->width == outParam.width) && (hFrameOut_->height == outParam.height));
-            assert (hFrameOut_->format == outParam.format);
+            assert ((frame_->width == outParam.width) && (frame_->height == outParam.height));
+            assert (frame_->format == outParam.format);
             if (0 == sws_isSupportedInput((AVPixelFormat) inParam.format))
             {
                 throw MediaError("Unsupported input pixel format " + std::to_string(inParam.format));
@@ -85,13 +57,13 @@ namespace avtools
         
         const AVFrame* convert(const AVFrame* pFIn)
         {
-            assert(hConvCtx_ && hFrameOut_);
-            int ret = sws_scale(hConvCtx_.get(), pFIn->data, pFIn->linesize, 0, pFIn->height, hFrameOut_->data, hFrameOut_->linesize);
+            assert(convCtx_ && frame_ && pFIn);
+            int ret = sws_scale(convCtx_.get(), pFIn->data, pFIn->linesize, 0, pFIn->height, frame_->data, frame_->linesize);
             if (ret < 0)
             {
                 throw MediaError("Error converting frame to output format.", ret);
             }
-            return hFrameOut_.get();
+            return frame_.get();
         }
     };  //::avtools::Transcoder::Implementation
     
@@ -115,7 +87,7 @@ namespace avtools
     
     const AVFrame* Transcoder::convert(const AVFrame* pF)
     {
-        assert(pImpl_);
+        assert(pImpl_ && pF);
         try
         {
             return pImpl_->convert(pF);

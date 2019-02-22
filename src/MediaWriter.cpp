@@ -26,43 +26,12 @@ namespace avtools
     class MediaWriter::Implementation
     {
     private:
-        FormatContextHandle                 hCtx_;      ///< format context for the output file
-        CodecContextHandle                  hCC_;       ///< encoder codec context
-        PacketHandle                        hPkt_;      ///< packet to encode the frames in
-        
-        /// Closes everything
-        void close()
-        {
-            if (hCtx_)
-            {
-                //pop all delayed packets from encoder
-                LOGD("MediaWriter: Flushing delayed packets from encoders.");
-                try
-                {
-                    write(nullptr);
-                }
-                catch (std::exception& err)
-                {
-                    LOGE("Error flushing packets and closing encoder: ", err.what());
-                }
-                //Write trailer
-                av_write_trailer(hCtx_.get());
-#ifndef NDEBUG
-                avtools::dumpContainerInfo(hCtx_.get(), true);
-#endif
-                LOGD("MediaWriter: Closing stream.");
-                
-                // Close file if output is file
-                if ( !(hCtx_->oformat->flags & AVFMT_NOFILE) )
-                {
-                    avio_close(hCtx_->pb);
-                }
-                hCC_.reset(nullptr);
-                hPkt_.reset(nullptr);
-                hCtx_.reset(nullptr);
-            }
-        }
-        
+        FormatContext formatCtx_;                   ///< format context for the output file
+        CodecContext codecCtx_;                     ///< codec context for the output video stream
+        Packet pkt_;                                ///< Packet to use for encoding frames
+
+        const int COMPLIANCE = FF_COMPLIANCE_NORMAL; //alternatively, to allow experimental codecs use FF_COMPLIANCE_EXPERIMENTAL
+
 //        /// Ctor
 //        Implementation(
 //            const std::string& url,
@@ -158,7 +127,7 @@ namespace avtools
 //                hCC_->max_qdiff = 4;
 //                hCC_->me_range = 3;
 //                hCC_->max_b_frames = 3;
-////                        hCC_->bit_rate = 1000000;
+//                //hCC_->bit_rate = 1000000;
 //                hCC_->refs = 3;
 //                ret = av_dict_set(&opts, "profile", "main", 0);   //also initializes opts
 //                if (ret < 0)
@@ -218,160 +187,139 @@ namespace avtools
 //            avtools::dumpContainerInfo(hCtx_.get(), true);
 //#endif
 //        }
-        Implementation(FormatContextHandle h):
-        hCtx_( std::move(h) ),
-        hCC_( avtools::allocateCodecContext() ),
-        hPkt_( avtools::allocatePacket() )
-        {
-            if (!hCtx_ || !hCC_ || !hPkt_)
-            {
-                throw MediaError("Unable to allocate contexts.");
-            }
-            avtools::initPacket(hPkt_);
+    public:
 
-            //Add the video stream to the output context
-            // Ensure that the provided container can contain the requested output codec
+        Implementation(
+            const std::string& url,
+            const AVCodecParameters& codecParam,
+            const TimeBaseType& timebase,
+            Dictionary& dict
+        ):
+        formatCtx_(FormatContext::OUTPUT),
+        codecCtx_(),
+        pkt_()
+        {
             assert (codecParam.codec_type == AVMEDIA_TYPE_VIDEO);
-            const int compliance = (allowExperimentalCodecs ? FF_COMPLIANCE_EXPERIMENTAL : FF_COMPLIANCE_NORMAL);
+            avdevice_register_all();    // Register devices
+
+            // Find encoder
             const AVCodecID codecId = codecParam.codec_id;
-            AVOutputFormat* pOutFormat = hCtx_->oformat;
+            //Init outout format context, open output file or stream
+            int ret = avformat_alloc_output_context2(&formatCtx_.get(), nullptr, nullptr, url.c_str());
+            if (ret < 0)
+            {
+                throw MediaError("Unable to allocate output context.", ret);
+            }
+
+            //Test that container can store this codec.
+            AVOutputFormat* pOutFormat = formatCtx_->oformat;
             assert(pOutFormat);
-            int ret = avformat_query_codec(pOutFormat, codecId, compliance);
+            ret = avformat_query_codec(pOutFormat, codecId, COMPLIANCE);
             if ( ret <= 0 )
             {
                 throw MediaError("File format " + std::string(pOutFormat->name) + " is unable to store " + std::to_string(codecId) + " streams.", ret);
             }
 
-            // Find encoder
+            // Open IO Context
+            if ( !(formatCtx_->flags & AVFMT_NOFILE) )
+            {
+                ret = avio_open2(&formatCtx_->pb, url.c_str(), AVIO_FLAG_WRITE, nullptr, &dict.get());
+                if (ret < 0)
+                {
+                    throw MediaError("Could not open " + url, ret);
+                }
+                assert(formatCtx_->pb);
+            }
+            LOGD("MediaWriter: Opened output file ", url, " in ", pOutFormat->long_name, " format.");
+            //Add the video stream to the output context
+            // Set up encoder context
+            ret = avcodec_parameters_to_context(codecCtx_.get(), &codecParam);
+            if (ret < 0)
+            {
+                throw MediaError("Unable to copy codec parameters to encoder context.", ret);
+            }
+
+            //Initialize codec context
+            codecCtx_->strict_std_compliance = COMPLIANCE;
+            codecCtx_->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;    // let codec know if we are using global header
+            codecCtx_->time_base = timebase;                    // Set timebase
+
             const AVCodec* pEncoder = avcodec_find_encoder(codecId);
             if (!pEncoder)
             {
                 throw MediaError("Cannot find an encoder for " + std::to_string(codecId));
             }
-            // Set up encoder context
-            ret = avcodec_parameters_to_context(hCC_.get(), &codecParam);
+            ret = avcodec_open2(codecCtx_.get(), pEncoder, &dict.get());
             if (ret < 0)
             {
-                throw MediaError("Unable to copy codec parameters to encoder context.", ret);
+                throw MediaError("Unable to open encoder context", ret);
             }
-            AVDictionary *opts = nullptr;
+            assert( codecCtx_.isOpen() );
+            LOGD("MediaWriter: Opened encoder for ", codecCtx_.info());
 
-            //Initialize codec context
-            hCC_->strict_std_compliance = compliance;
-            hCC_->flags |= AV_CODEC_FLAG_GLOBAL_HEADER; // let codec know if we are using global header
-            hCC_->time_base = timebase;        // Set timebase    public:
-        }
-
-    public:
-        /// Opens and returns a handle to the implementation
-        /// @param[in] dict a dictionary to read format/codec parameters from
-        /// @return a handle to the imlementation
-        static std::unique_ptr<Implementation> Open(const AVDictionary& dict)
-        {
-            avdevice_register_all();    // Register devices
-            //Init outout format context, open output file or stream
-            AVFormatContext* pCtx = nullptr;
-            AVOutputFormat *pFormat = nullptr;
-            // Get the input format
-            const AVDictionaryEntry* pContainer = av_dict_get(&dict, "container", nullptr, 0);
-            if (pContainer)
+            // Add stream
+            AVStream* pStr = avformat_new_stream(formatCtx_.get(), pEncoder);
+            if ( !pStr )
             {
-                pFormat = av_guess_format(pContainer->value, nullptr, nullptr);
-            }
-            const AVDictionaryEntry* pUrl = av_dict_get(&dict, "url", nullptr, 0);
-            assert(pUrl);    //url must be provided
-            AVDictionary* pDict = nullptr;
-            int status = av_dict_copy(&pDict, &dict, 0);
-            if (status < 0)
-            {
-                throw MediaError("Unable to clone input dictionary.");
+                throw MediaError("Unable to add stream for " + std::to_string(codecId));
             }
 
-            status = avformat_alloc_output_context2(&pCtx, pFormat, nullptr, pUrl->value);
-            if (status < 0)
-            {
-                throw MediaError("Unable to allocate output context.", status);
-            }
-            assert(pCtx);
-            if ( !(pCtx->flags & AVFMT_NOFILE) )
-            {
-                status = avio_open2(&pCtx->pb, pUrl->value, AVIO_FLAG_WRITE, nullptr, &pDict);
-                if (status < 0)
-                {
-                    throw MediaError("Could not open " + std::string(pUrl->value), status);
-                }
-                assert(pCtx->pb);
-            }
-            LOGD("MediaWriter: Opened output stream ", pUrl->value, " in ", pCtx->oformat->long_name, " format.");
-            return std::make_unique<Implementation>(FormatContextHandle(pCtx, [](AVFormatContext* pp) {avformat_free_context(pp); }));
+            //copy codec params to stream
+            avcodec_parameters_from_context(pStr->codecpar, codecCtx_.get());
+            pStr->time_base = timebase;
 
-
-            ////////////
-            //        av_register_all();          // Register codecs - his is deprecated for ffmpeg >4.0
-            AVFormatContext* p = nullptr;
-            AVInputFormat *pFormat = nullptr;
-            // Get the input format
-            const AVDictionaryEntry* pDriver = av_dict_get(&dict, "driver", nullptr, 0);
-            if (pDriver)
-            {
-                pFormat = av_find_input_format(pDriver->value);
-            }
-            
-            assert(av_dict_get(&dict, "url", nullptr, 0));    //url must be provided
-            const char* url = av_dict_get(&dict, "url", nullptr, 0)->value;
-            AVDictionary* pDict = nullptr;
-            int status = av_dict_copy(&pDict, &dict, 0);
-            if (status < 0)
-            {
-                throw MediaError("Unable to clone input dictionary.");
-            }
-            
-            status = avformat_open_input( &p, url, pFormat, &pDict );
-            if( status < 0 )  // Couldn't open file
-            {
-                throw MediaError("Could not open " + std::string(url), status);
-            }
-
-            return std::make_unique<Implementation>(dict);
-        }
-        
-        static std::unique_ptr<Implementation> Open(
-            const std::string& url,
-            const AVCodecParameters& codecParam,
-            const TimeBaseType& timebase,
-            bool allowExperimentalCodecs=false
-        )
-        {
-            AVDictionary* pOpts = nullptr;
-            int ret = av_dict_set(&pOpts, "url", url.c_str(), 0);
+            assert( pStr->codecpar && (pStr->codecpar->codec_id == codecId) && (pStr->codecpar->codec_type == AVMEDIA_TYPE_VIDEO) );
+            assert( (formatCtx_->nb_streams == 1) && (pStr == formatCtx_->streams[0]) );
+            LOGD("MediaWriter: Opened ", *pStr);
+            // Write stream header
+            ret = avformat_write_header(formatCtx_.get(), nullptr);
             if (ret < 0)
             {
-                throw MediaError("Unable to set url in dictionary. ", ret);
+                throw MediaError("Error occurred when writing output stream header.", ret);
             }
-            
-            avtools::Handle<AVDictionary> hDict(pOpts, [](AVDictionary* p){if (p) av_dict_free(&p);});
-            return Open(*pOpts);
+            LOGD("MediaWriter: Opened output file ", formatCtx_->url);
+#ifndef NDEBUG
+            formatCtx_.dumpContainerInfo();
+#endif
         }
 
         /// Dtor
         ~Implementation()
         {
-            close();
+            try
+            {
+                write(nullptr);
+                //Write trailer
+                av_write_trailer(formatCtx_.get());
+                // Close file if output is file
+                if ( !(formatCtx_->oformat->flags & AVFMT_NOFILE) )
+                {
+                    avio_close(formatCtx_->pb);
+                }
+            }
+            catch (std::exception& err)
+            {
+                LOGE("Error while flushing packets and closing encoder: ", err.what());
+            }
+#ifndef NDEBUG
+            formatCtx_.dumpContainerInfo();
+#endif
         }
         
         /// @return list of opened streams in the output file
         inline const AVStream* stream() const
         {
-            assert(hCtx_ && (hCtx_->nb_streams == 1) );
-            return hCtx_->streams[0];
+            assert(formatCtx_ && (formatCtx_->nb_streams == 1) );
+            return formatCtx_->streams[0];
         }
         
         /// Writes a frame to a particular stream.
         /// @param[in] pFrame frame data to write
         void write(const AVFrame* pFrame)
         {
+            assert( formatCtx_ );
             // send frame to encoder
-            int ret = avcodec_send_frame(hCC_.get(), pFrame);
+            int ret = avcodec_send_frame(codecCtx_.get(), pFrame);
             if (ret < 0)
             {
                 if (pFrame)
@@ -383,10 +331,11 @@ namespace avtools
                     throw MediaError("Error flushing encoder", ret);
                 }
             }
-            avtools::unrefPacket(hPkt_);
+            pkt_.unref();
+            const AVStream* pStr = stream();
             while (true) //write all available packets
             {
-                ret = avcodec_receive_packet(hCC_.get(), hPkt_.get());
+                ret = avcodec_receive_packet(codecCtx_.get(), pkt_.get());
                 if (ret == AVERROR(EAGAIN))
                 {
                     break;  //need to write more frames to get packets
@@ -400,20 +349,21 @@ namespace avtools
                     throw MediaError("Error reading packets from encoder", ret);
                 }
                 //Write packet to file
-                hPkt_->dts = AV_NOPTS_VALUE;  //let the muxer figure this out
-                hPkt_->stream_index = 0;
-                hPkt_->pts = av_rescale_q(hPkt_->pts, hCC_->time_base, stream()->time_base);   //this is necessary since writing the header can change the time_base of the stream.
+                pkt_->dts = AV_NOPTS_VALUE;  //let the muxer figure this out
+                pkt_->stream_index = 0; //only one output stream
+                pkt_->pts = av_rescale_q(pkt_->pts, codecCtx_->time_base, pStr->time_base);   //this is necessary since writing the header can change the time_base of the stream.
+                pkt_->dts = av_rescale_q(pkt_->dts, codecCtx_->time_base, pStr->time_base);
+                pkt_->duration = av_rescale_q(pkt_->duration, codecCtx_->time_base, pStr->time_base);
 //                LOGD("Muxing packet for ", *pCtx_->streams[stream]);
 //                LOGD("\tpts = ", pkt->pts, ", time_base = ", pCtx_->streams[stream]->time_base, ";\ttime(s) = ", avtools::calculateTime(pkt->pts, pCtx_->streams[stream]->time_base));
         
                 //mux encoded frame
-                ret = av_interleaved_write_frame(hCtx_.get(), hPkt_.get());
+                ret = av_interleaved_write_frame(formatCtx_.get(), pkt_.get());
                 if (ret < 0)
                 {
                     throw MediaError("Error muxing packet", ret);
                 }
             }
-//            av_log_set_level(AV_LOG_WARNING);
         }
         
     };  //::avtools::MediaWriter::Implementation
@@ -423,60 +373,34 @@ namespace avtools
     //MediaWriter Definitions
     //
     //=====================================================
-    
-    MediaWriter::MediaWriter(
-        const std::string& url,
-        const AVCodecParameters& codecParam, 
-        const TimeBaseType& timebase, 
-        bool allowExperimentalCodecs
+
+    MediaWriter::MediaWriter
+    (
+         const std::string& url,
+         const AVCodecParameters& codecParam,
+         const TimeBaseType& timebase
     ):
-    pImpl_( Implementation::Open(url, codecParam, timebase, allowExperimentalCodecs) )
+    pImpl_( nullptr )
     {
+        Dictionary dict;
+        pImpl_ = std::make_unique<Implementation>(url, codecParam, timebase, dict);
         assert ( pImpl_ );
     }
-    
-    MediaWriter::MediaWriter(const AVDictionary& dict):
-    pImpl_ (Implementation::Open(dict))
+
+    MediaWriter::MediaWriter
+    (
+        const std::string& url,
+        const AVCodecParameters& codecParam, 
+        const TimeBaseType& timebase,
+        Dictionary& dict
+    ):
+    pImpl_( std::make_unique<Implementation>(url, codecParam, timebase, dict) )
     {
-        assert( pImpl_);
+        assert ( pImpl_ );
     }
 
     MediaWriter::~MediaWriter() = default;
 
-    MediaWriter::Handle MediaWriter::Open(
-        const std::string& url, 
-        const AVCodecParameters& codecParam, 
-        const TimeBaseType& timebase, 
-        bool allowExperimentalCodecs
-    ) noexcept
-    {
-        try
-        {
-            Handle h(new MediaWriter(url, codecParam, timebase, allowExperimentalCodecs));
-            assert(h);
-            return h;
-        }
-        catch (std::exception& err)
-        {
-            LOGE("MediaWriter: Unable to open ", url, ":", err.what());
-            return nullptr;
-        }
-    }
-        
-    MediaWriter::Handle MediaWriter::Open(const AVDictionary& dict) noexcept
-    {
-        try
-        {
-            Handle h(new MediaWriter(dict));
-            assert(h);
-            return h;
-        }
-        catch (std::exception& err)
-        {
-            LOGE("MediaWriter: Unable to open MediaWriter: ", err.what());
-            return nullptr;
-        }
-    }
     const AVStream* MediaWriter::getStream() const
     {
         assert(pImpl_);
@@ -494,7 +418,7 @@ namespace avtools
             }
             else
             {
-                pImpl_.reset(nullptr);
+                pImpl_.reset(nullptr);  //close stream
             }
         }
         catch (std::exception& e)

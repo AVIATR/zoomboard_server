@@ -12,6 +12,7 @@
 #include <memory>
 #include <vector>
 #include "Media.hpp"
+#include "LibAVWrappers.hpp"
 
 struct AVCodecParameters;
 struct AVFrame;
@@ -24,44 +25,33 @@ namespace avtools
     {
     public:
         
-        typedef std::unique_ptr<MediaWriter> Handle;   ///< handle to this class
-        
         /// Ctor that opens a stream
         /// @param[in] url stream URL
         /// @param[in] codecParam video codec parameters
         /// @param[in] timebase timebase for the video stream
-        /// @param[in] allowExperimentalCodecs whether to allow experimental codecs
+        /// @throw StreamError if stream cannot be opened for writing
+        MediaWriter(
+                    const std::string& url,
+                    const AVCodecParameters& codecParam,
+                    const TimeBaseType& timebase
+                    );
+
+        /// Ctor that opens a stream
+        /// @param[in] url stream URL
+        /// @param[in] codecParam video codec parameters
+        /// @param[in] timebase timebase for the video stream
+        /// @param[in] dict a dictionary with optional codec parameters. After construction, the used entries are consumed
+        /// and only the unused entries remain
         /// @throw StreamError if stream cannot be opened for writing
         MediaWriter(
             const std::string& url, 
             const AVCodecParameters& codecParam, 
-            const TimeBaseType& timebase, 
-            bool allowExperimentalCodecs=false
+            const TimeBaseType& timebase,
+            Dictionary& dict
         );
         
-        /// Ctor that opens a stream
-        /// @param[in] dict a dictionary containing the url, codec parameters, timebase etc. to use
-        /// @throw StreamError if an error occurs while opening the stream
-        MediaWriter(const AVDictionary& dict);
-
         ///Dtor
         ~MediaWriter();
-        
-        /// Open a file for writing.
-        /// @param[in] filename name of file to open
-        /// @return a handle to the media writer, nullptr if file cannot be opened for writing
-        static Handle Open(
-            const std::string& url,
-            const AVCodecParameters& codecParam, 
-            const TimeBaseType& timebase, 
-            bool allowExperimentalCodecs=false
-        ) noexcept;
-
-        /// Opens a stream
-        /// @param[in] dict a dictionary containing the url, codec parameters, timebase etc. to use
-        /// @return a handle to the MediaWriter instance
-        /// @throw StreamError if an error occurs while opening the stream
-        static Handle Open(const AVDictionary& dict) noexcept;
         
         /// @return opened video stream
         const AVStream* getStream() const;

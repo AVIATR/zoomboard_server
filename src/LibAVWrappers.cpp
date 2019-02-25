@@ -317,7 +317,12 @@ namespace avtools
             throw MediaError("Unable to determine codec parameters from codec context", ret);
         }
     }
-    
+
+    CodecParameters::CodecParameters(const CodecContext& cc):
+    CodecParameters(cc.get())
+    {
+    }
+
     CodecParameters::CodecParameters(const CodecParameters& cp)
     {
         assert(pParam_);
@@ -326,16 +331,6 @@ namespace avtools
         {
             throw MediaError("Unable to clone codec parameters", ret);
         }
-    }
-
-    CodecParameters& CodecParameters::operator=(const CodecParameters& cp)
-    {
-        int ret = avcodec_parameters_copy(pParam_, cp.get());
-        if ( ret < 0 )
-        {
-            throw MediaError("Unable to clone codec parameters", ret);
-        }
-        return *this;
     }
 
     CodecParameters::~CodecParameters()
@@ -349,21 +344,20 @@ namespace avtools
     std::string CodecParameters::info(int indent/*=0*/) const
     {
         assert(pParam_);
-        const auto codecPar = *pParam_;
-        if (codecPar.codec_type == AVMEDIA_TYPE_VIDEO)
+        if (pParam_->codec_type == AVMEDIA_TYPE_VIDEO)
         {
             const std::string filler(indent, '\t');
             std::stringstream ss;
             ss << filler << "Video codec info:" << std::endl;
-            ss << filler << "\tCodec ID: " << codecPar.codec_id << std::endl;
-            ss << filler << "\tFormat: " << (AVPixelFormat) codecPar.format << std::endl;
-            ss << filler << "\tSize (wxh): " << codecPar.width << "x" << codecPar.height << std::endl;
-            ss << filler << "\tPixel Aspect Ratio: " << codecPar.sample_aspect_ratio;
+            ss << filler << "\tCodec ID: " << pParam_->codec_id << std::endl;
+            ss << filler << "\tFormat: " << (AVPixelFormat) pParam_->format << std::endl;
+            ss << filler << "\tSize (wxh): " << pParam_->width << "x" << pParam_->height << std::endl;
+            ss << filler << "\tPixel Aspect Ratio: " << pParam_->sample_aspect_ratio;
             return ss.str();
         }
         else
         {
-            throw std::invalid_argument("Info re: " + std::to_string(codecPar.codec_type) + " codecs is not available.");
+            throw std::invalid_argument("Info re: " + std::to_string(pParam_->codec_type) + " codecs is not available.");
         }
     }
     

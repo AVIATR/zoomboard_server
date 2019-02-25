@@ -1,0 +1,17 @@
+/Users/endertekin/Projects/zoomboard/rtmp_server/mkbld/CMakeFiles/install/local.dir
+/Users/endertekin/Projects/zoomboard/rtmp_server/mkbld/CMakeFiles/install/strip.dir
+/Users/endertekin/Projects/zoomboard/rtmp_server/mkbld/CMakeFiles/install.dir
+/Users/endertekin/Projects/zoomboard/rtmp_server/mkbld/CMakeFiles/package_source.dir
+/Users/endertekin/Projects/zoomboard/rtmp_server/mkbld/CMakeFiles/rebuild_cache.dir
+/Users/endertekin/Projects/zoomboard/rtmp_server/mkbld/CMakeFiles/edit_cache.dir
+/Users/endertekin/Projects/zoomboard/rtmp_server/mkbld/CMakeFiles/list_install_components.dir
+/Users/endertekin/Projects/zoomboard/rtmp_server/mkbld/CMakeFiles/package.dir
+/Users/endertekin/Projects/zoomboard/rtmp_server/mkbld/src/CMakeFiles/install/local.dir
+/Users/endertekin/Projects/zoomboard/rtmp_server/mkbld/src/CMakeFiles/install/strip.dir
+/Users/endertekin/Projects/zoomboard/rtmp_server/mkbld/src/CMakeFiles/install.dir
+/Users/endertekin/Projects/zoomboard/rtmp_server/mkbld/src/CMakeFiles/list_install_components.dir
+/Users/endertekin/Projects/zoomboard/rtmp_server/mkbld/src/CMakeFiles/package_source.dir
+/Users/endertekin/Projects/zoomboard/rtmp_server/mkbld/src/CMakeFiles/rebuild_cache.dir
+/Users/endertekin/Projects/zoomboard/rtmp_server/mkbld/src/CMakeFiles/edit_cache.dir
+/Users/endertekin/Projects/zoomboard/rtmp_server/mkbld/src/CMakeFiles/package.dir
+/Users/endertekin/Projects/zoomboard/rtmp_server/mkbld/src/CMakeFiles/rtmp_server.dir

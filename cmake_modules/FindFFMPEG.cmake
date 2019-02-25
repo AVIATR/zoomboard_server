@@ -7,6 +7,8 @@
 #                            are located and set properly
 #   LIBAVCODEC_INCLUDE_DIR  - libavcodec include directory
 #   LIBAVCODEC_LIBRARY      - libavcodec library
+#   LIBAVDEVICE_INCLUDE_DIR - libavdevice include directory
+#   LIBAVDEVICE_LIBRARY     - libavdevice library
 #   LIBAVFORMAT_INCLUDE_DIR - libavformat include directory
 #   LIBAVFORMAT_LIBRARY     - libavformat library
 #   LIBAVUTIL_INCLUDE_DIR   - libavutil include directory
@@ -15,7 +17,7 @@
 #   LIBAVFILTER_LIBRARY     - libavfilter library
 #   LIBSWSCALE_INCLUDE_DIR  - libswscale include directory
 #   LIBSWSCALE_LIBRARY      - libswscale library
-#   LIBSWRESAMPLE_INCLUDE_DIR  - libswresample include directory
+#   LIBSWRESAMPLE_INCLUDE_DIR libswresample include directory
 #   LIBSWRESAMPLE_LIBRARY   - libswresample library
 
 find_package( PkgConfig )
@@ -39,6 +41,7 @@ if( PKG_CONFIG_FOUND )
     pkg_search_module( PC_LIBAVCODEC libavcodec )
 
     # Same as above, but searching for the remaining modules instead
+    pkg_search_module( PC_LIBAVDEVICE libavdevice )
     pkg_search_module( PC_LIBAVFORMAT libavformat )
     pkg_search_module( PC_LIBAVUTIL libavutil )
     pkg_search_module( PC_LIBAVFILTER libavfilter )
@@ -84,6 +87,53 @@ find_library( LIBAVCODEC_LIBRARY avcodec
         # Hints provided by pkg-config
         ${PC_LIBAVCODEC_LIBDIR}
         ${PC_LIBAVCODEC_LIBRARY_DIRS}
+    PATHS
+        ~/usr/lib/
+        /opt/local/lib/
+        /usr/lib/
+        /usr/lib64/
+        /usr/local/lib/
+        /opt/kde4/lib/
+        ${KDE4_LIB_DIR}
+)
+
+###############
+## libavdevice#
+###############
+
+find_path( LIBAVDEVICE_INCLUDE_DIR libavdevice/avdevice.h
+    HINTS
+        # Hints provided by pkg-config
+        ${PC_LIBAVDEVICE_INCLUDEDIR}
+        ${PC_LIBAVDEVICE_INCLUDEDIR}/*
+        ${PC_LIBAVDEVICE_INCLUDE_DIRS}
+    PATHS
+        # Standard include directories
+        /usr/include/
+        ~/usr/include/
+        /opt/local/include/
+        /usr/local/include/
+        /opt/kde4/include/
+        ${KDE4_INCLUDE_DIR}/
+        # Search all subdirs of the above
+        /usr/include/*
+        ~/usr/include/*
+        /opt/local/include/*
+        /usr/local/include/*
+        /opt/kde4/include/*
+        ${KDE4_INCLUDE_DIR}/*
+    PATH_SUFFIXES
+        # Subdirectory hints
+        libavdevice
+        ffmpeg
+        ffmpeg/libavdevice
+)
+
+find_library( LIBAVDEVICE_LIBRARY avdevice
+    HINTS
+        # Hints provided by pkg-config
+        ${PC_LIBAVDEVICE_LIBDIR}
+        ${PC_LIBAVDEVICE_LIBRARY_DIRS}
     PATHS
         ~/usr/lib/
         /opt/local/lib/
@@ -333,6 +383,8 @@ include( FindPackageHandleStandardArgs )
 # Sets FFMPEG_FOUND to true if all of the following are set:
 #   LIBAVCODEC_INCLUDE_DIR
 #   LIBAVCODEC_LIBRARY
+#   LIBAVDEVICE_INCLUDE_DIR
+#   LIBAVDEVICE_LIBRARY
 #   LIBAVFORMAT_INCLUDE_DIR
 #   LIBAVFORMAT_LIBRARY
 #   LIBAVUTIL_INCLUDE_DIR
@@ -346,6 +398,8 @@ include( FindPackageHandleStandardArgs )
 find_package_handle_standard_args( FFmpeg DEFAULT_MSG
     LIBAVCODEC_INCLUDE_DIR
     LIBAVCODEC_LIBRARY
+    LIBAVDEVICE_INCLUDE_DIR
+    LIBAVDEVICE_LIBRARY
     LIBAVFORMAT_INCLUDE_DIR
     LIBAVFORMAT_LIBRARY
     LIBAVUTIL_INCLUDE_DIR
@@ -358,16 +412,26 @@ find_package_handle_standard_args( FFmpeg DEFAULT_MSG
     LIBSWRESAMPLE_LIBRARY
 )
 if( FFMPEG_FOUND )
-    message( STATUS "\tlibavcodec: ${LIBAVCODEC_INCLUDE_DIR}, ${LIBAVCODEC_LIBRARY}" )
-    message( STATUS "\tlibavformat: ${LIBAVFORMAT_INCLUDE_DIR}, ${LIBAVFORMAT_LIBRARY}" )
-    message( STATUS "\tlibavutil: ${LIBAVUTIL_INCLUDE_DIR}, ${LIBAVUTIL_LIBRARY}" )
-    message( STATUS "\tlibavfilter: ${LIBAVFILTER_INCLUDE_DIR}, ${LIBAVFILTER_LIBRARY}" )
-    message( STATUS "\tlibswscale: ${LIBSWSCALE_INCLUDE_DIR}, ${LIBSWSCALE_LIBRARY}" )
-    message( STATUS "\tlibswresample: ${LIBSWRESAMPLE_INCLUDE_DIR}, ${LIBSWRESAMPLE_LIBRARY}" )
+    message( STATUS "\tlibavcodec:\t${LIBAVCODEC_INCLUDE_DIR}, ${LIBAVCODEC_LIBRARY}" )
+    message( STATUS "\tlibavdevice:\t${LIBAVDEVICE_INCLUDE_DIR}, ${LIBAVDEVICE_LIBRARY}" )
+    message( STATUS "\tlibavformat:\t${LIBAVFORMAT_INCLUDE_DIR}, ${LIBAVFORMAT_LIBRARY}" )
+    message( STATUS "\tlibavutil:\t${LIBAVUTIL_INCLUDE_DIR}, ${LIBAVUTIL_LIBRARY}" )
+    message( STATUS "\tlibavfilter:\t${LIBAVFILTER_INCLUDE_DIR}, ${LIBAVFILTER_LIBRARY}" )
+    message( STATUS "\tlibswscale:\t${LIBSWSCALE_INCLUDE_DIR}, ${LIBSWSCALE_LIBRARY}" )
+    message( STATUS "\tlibswresample:\t${LIBSWRESAMPLE_INCLUDE_DIR}, ${LIBSWRESAMPLE_LIBRARY}" )
 endif( FFMPEG_FOUND )
 
-set(FFMPEG_INCLUDE_DIRS ${LIBAVCODEC_INCLUDE_DIR} ${LIBAVFORMAT_INCLUDE_DIR} ${LIBAVUTIL_INCLUDE_DIR} ${LIBAVFILTER_INCLUDE_DIR} ${LIBSWSCALE_INCLUDE_DIR})
+set(FFMPEG_INCLUDE_DIRS ${LIBAVCODEC_INCLUDE_DIR} ${LIBAVDEVICE_INCLUDE_DIR} ${LIBAVFORMAT_INCLUDE_DIR} ${LIBAVUTIL_INCLUDE_DIR} ${LIBAVFILTER_INCLUDE_DIR} ${LIBSWSCALE_INCLUDE_DIR})
 list(REMOVE_DUPLICATES FFMPEG_INCLUDE_DIRS)
-set(FFMPEG_LIBRARIES ${LIBAVCODEC_LIBRARY} ${LIBAVFORMAT_LIBRARY} ${LIBAVUTIL_LIBRARY} ${LIBAVFILTER_LIBRARY} ${LIBSWSCALE_LIBRARY} ${LIBSWRESAMPLE_LIBRARY})
+set(FFMPEG_LIBRARIES ${LIBAVCODEC_LIBRARY} ${LIBAVDEVICE_LIBRARY} ${LIBAVFORMAT_LIBRARY} ${LIBAVUTIL_LIBRARY} ${LIBAVFILTER_LIBRARY} ${LIBSWSCALE_LIBRARY} ${LIBSWRESAMPLE_LIBRARY})
 
-mark_as_advanced( LIBAVCODEC_LIBRARY LIBAVFORMAT_LIBRARY LIBAVCODEC_INCLUDE_DIR LIBAVFORMAT_INCLUDE_DIR LIBAVUTIL_LIBRARY LIBAVUTIL_INCLUDE_DIR LIBAVFILTER_INCLUDE_DIR LIBAVFILTER_LIBRARY LIBSWSCALE_LIBRARY LIBSWSCALE_INCLUDE_DIR LIBSWRESAMPLE_LIBRARY LIBSWRESAMPLE_INCLUDE_DIR FFMPEG_INCLUDE_DIRS FFMPEG_LIBRARIES)
+mark_as_advanced( 
+    LIBAVCODEC_LIBRARY LIBAVCODEC_INCLUDE_DIR
+    LIBAVDEVICE_LIBRARY LIBAVDEVICE_INCLUDE_DIR 
+    LIBAVFORMAT_LIBRARY LIBAVFORMAT_INCLUDE_DIR
+    LIBAVUTIL_LIBRARY LIBAVUTIL_INCLUDE_DIR
+    LIBAVFILTER_LIBRARY LIBAVFILTER_INCLUDE_DIR
+    LIBSWSCALE_LIBRARY LIBSWSCALE_INCLUDE_DIR 
+    LIBSWRESAMPLE_LIBRARY LIBSWRESAMPLE_INCLUDE_DIR
+    FFMPEG_INCLUDE_DIRS FFMPEG_LIBRARIES
+)

@@ -262,10 +262,6 @@ namespace avtools
         /// @return true if the underlying ptr is non-null
         explicit inline operator bool() const {return (pParam_ != nullptr); }
 
-        /// Clones codec parameters
-        /// @param[in] cp source parameters
-        CodecParameters& operator=(const CodecParameters& cp);
-        
         /// Provides a brief information string regarding the underlying codec context.
         /// @param[in] indent number of indentation tabs in the returned string
         /// @return a string with information about the codec.

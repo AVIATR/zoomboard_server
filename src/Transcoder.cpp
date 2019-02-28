@@ -32,14 +32,10 @@ namespace avtools
     private:
         ImageConversionContext      convCtx_;       ///< Conversion context
         Frame                       frame_;         ///< Frame holding transcoded frame data
-//        AVCodecParameters           inParam_;       ///< Input codec parameters
-//        AVCodecParameters           outParam_;      ///< Output codec parameters
     public:
         Implementation(const AVCodecParameters& inParam, const AVCodecParameters& outParam):
         convCtx_(inParam, outParam),
         frame_(outParam)
-//        inParam_( inParam ),
-//        outParam_( outParam )
         {
             assert ((frame_->width == outParam.width) && (frame_->height == outParam.height));
             assert (frame_->format == outParam.format);

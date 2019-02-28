@@ -1,5 +1,5 @@
 #!/bin/bash
-export PROJ_NAME="rtmp_server"
+export PROJ_NAME="zoomboard_server"
 function usage {
     echo "Usage: $0 [-x|--xcode] [-h|--help] [-b|--build] [build_dir]"
     echo " -x               Create xcode project. By default, a make project is created."

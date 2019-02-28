@@ -8,7 +8,13 @@ cmake_minimum_required(VERSION 3.5.0)
 #set(CMAKE_OSX_SYSROOT "")
 #SET(CMAKE_CXX_FLAGS "--sysroot ${CMAKE_OSX_SYSROOT} ${CMAKE_CXX_FLAGS}")
 #MESSAGE("Setting MACOSX_DEPLOYMENT_TARGET to '${MACOSX_DEPLOYMENT_TARGET}'.")
-project($ENV{PROJ_NAME} 
+if(DEFINED $ENV{PROJ_NAME})
+    set(PROJ_NAME $ENV{PROJ_NAME})
+else()
+    set(PROJ_NAME "zoomboard_server")
+endif()
+
+project("${PROJ_NAME}"
 	LANGUAGES CXX
 	VERSION 0.1.0)
 

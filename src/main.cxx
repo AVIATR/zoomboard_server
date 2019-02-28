@@ -8,6 +8,7 @@
 
 #include <cassert>
 #include <string>
+#include <algorithm>
 #include <vector>
 #include "version.h"
 #include "MediaReader.hpp"
@@ -54,6 +55,7 @@ namespace
 // sudo avconv -f video4linux2 -r 5 -s hd1080 -i /dev/video0 \
 //  -vf "format=yuv420p,framerate=5" -c:v libx264 -profile:v:0 high -level 3.0 -flags +cgop -g 1 \
 //  -hls_time 0.1 -hls_allow_cache 0 -an -preset ultrafast /mnt/hls/stream.m3u8
+// For further help, see https://libav.org/avconv.html
 int main(int argc, const char * argv[])
 {
     // Parse command line arguments & load the config file
@@ -72,15 +74,10 @@ int main(int argc, const char * argv[])
     avtools::Dictionary inputOpts;
     inputOpts.add("driver", opts.inputDriver);
     inputOpts.add("framerate", opts.frameRate);
-    inputOpts.add("width", opts.resolution.width);
-    inputOpts.add("height", opts.resolution.height);
+    inputOpts.add("video_size", std::to_string(opts.resolution.width) + "x" + std::to_string(opts.resolution.height));
 
     avtools::MediaReader reader(opts.inputDevice, inputOpts);
-    const AVStream* pStr = reader.getVideoStream();
-    if (!pStr)
-    {
-        throw std::runtime_error("Could not find any video streams that can be processed.");
-    }
+    LOGD("Opened input stream.");
 
     // -----------
     // Get calibration matrix
@@ -205,6 +202,7 @@ namespace
         opts.outputUrl = (std::string) fs["url"];
         opts.frameRate = (int) fs["fps"];
         std::string resolution = (std::string) fs["resolution"];
+        std::transform(resolution.begin(), resolution.end(), resolution.begin(), ::tolower);
         if (0 == resolution.compare("1080p"))
         {
             opts.resolution = cv::Size(1920, 1080);
@@ -213,11 +211,11 @@ namespace
         {
             opts.resolution = cv::Size(1280, 720);
         }
-        else if (0 == resolution.compare("VGA"))
+        else if (0 == resolution.compare("vga"))
         {
             opts.resolution = cv::Size(640, 480);
         }
-        else if (0 == resolution.compare("QVGA"))
+        else if (0 == resolution.compare("qvga"))
         {
             opts.resolution = cv::Size(320, 240);
         }

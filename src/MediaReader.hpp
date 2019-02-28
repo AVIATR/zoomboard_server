@@ -30,17 +30,11 @@ namespace avtools
         MediaReader(const std::string& url);
 
         /// More general ctor
-        /// @param[in, out] opts stream options to use, such as url, resolution & frame rate.
-        /// On return, this dictionary should contain the actual values used in opening.
-        /// @throw std::runtime_exception if there was an error opening the stream.
-        [[deprecated]]
-        MediaReader(const std::string& url, const AVDictionary& opts);
-
-        /// More general ctor
+        /// @param[in] url url of media file to open
         /// @param[in, out] opts stream options to use, such as resolution & frame rate.
         /// On return, this dictionary should contain the actual values used in opening.
         /// @throw std::runtime_exception if there was an error opening the stream.
-        MediaReader(const std::string& url, const Dictionary& opts);
+        MediaReader(const std::string& url, Dictionary& opts);
         
         /// Dtor
         ~MediaReader();

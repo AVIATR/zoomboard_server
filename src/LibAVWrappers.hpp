@@ -101,6 +101,13 @@ namespace avtools
         /// so that the buffers are referred to by the new packet
         Packet(const AVPacket* pPkt=nullptr);
 
+        /// Copy ctor
+        /// @param[in] source packet. Note that this packet references the same data as pkt.
+        Packet(const Packet& pkt);
+
+        /// Ctor that initializes a packet referring to existing data
+        Packet(std::uint8_t* data, int len);
+
         /// Dtor
         ~Packet();
         
@@ -131,7 +138,10 @@ namespace avtools
     public:
         /// Ctor
         /// @param[in] pDict a previously allocated dictionary, or nullptr if one should be allocated
-        inline Dictionary(AVDictionary* pDict=nullptr): pDict_(pDict) {};
+        Dictionary(const AVDictionary* pDict=nullptr);
+        /// Ctor
+        /// @param[in] dict a dictionary to clone. All entries are copied here as a separate dictionary
+        inline Dictionary(const Dictionary& dict): Dictionary(dict.get()) {};
         /// Dtor
         ~Dictionary();
         ///< @return pointer to the wrapper dictionary
@@ -174,10 +184,11 @@ namespace avtools
         /// @param[in] key to check for
         /// @return true if the dictionary has this key, false otherwise.
         bool has(const std::string& key) const;
-        
-        /// Clones a dictionary. Any entries in this dictionary are lost.
-        /// @param[in] dict source dictionary
-        Dictionary& operator=(const Dictionary& dict);
+
+        /// Returns a string representation of the dictionary entries
+        std::string as_string(const char keySep='\t', const char entrySep='\n') const;
+
+        inline Dictionary& operator=(const Dictionary& dict) = delete;
     };  //avtools::Dictionary
     
     class CodecParameters;
@@ -194,7 +205,11 @@ namespace avtools
         /// Ctor
         /// @param[in] param codec parameters to use
         CodecContext(const CodecParameters& param);
-        
+
+        /// Copy ctor
+        /// @param[in] cc source codec context. Entries are cloned
+        CodecContext(const CodecContext& cc);
+
         /// Dtor
         ~CodecContext();
         
@@ -230,11 +245,8 @@ namespace avtools
         AVCodecParameters* pParam_;
     public:
         /// Ctor
-        CodecParameters();
-        
-        /// Ctor
         /// @param[in] pCC pointer to a codec context
-        CodecParameters(const AVCodecContext* pCC);
+        CodecParameters(const AVCodecContext* pCC = nullptr);
         
         /// Ctor
         /// @param[in] cc codec context to initialize parameters from
@@ -284,7 +296,9 @@ namespace avtools
         const Type type;
         /// Ctor
         FormatContext(Type type);
-        
+
+        inline FormatContext(const FormatContext& fc) = delete;
+
         /// Dtor
         ~FormatContext();
         
@@ -339,6 +353,7 @@ namespace avtools
         /// Ctor that initializes a buffer
         /// @param[in] n length of buffer
         inline CharBuf(size_t n): p_((char*) av_malloc_array(n, sizeof(char))) {}
+        inline CharBuf(const CharBuf& cb): p_(av_strdup(cb.get())) {};
         inline ~CharBuf() {if (p_) av_free(p_);}    ///< Dtor
         inline char*& get() {return p_;}            ///< @return a reference to the underlying ptr
         inline const char* get() const {return p_;} ///< @return the underlying ptr
@@ -366,6 +381,8 @@ namespace avtools
         /// @param[in] outH height of outgoing frames
         /// @param[in] outFmt pixel format of outgoing frames
         ImageConversionContext(int inW, int inH, AVPixelFormat inFmt, int outW, int outH, AVPixelFormat outFmt);
+
+        inline ImageConversionContext(const ImageConversionContext&) = delete;
 
         /// Dtor
         /// @param[in] inParam codec parameters for incoming frames

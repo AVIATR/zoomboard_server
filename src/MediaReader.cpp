@@ -23,35 +23,6 @@ extern "C" {
 }
 
 using avtools::MediaError;
-namespace
-{
-    /// Initializes and returns a format context using the information in the provided dictionary
-    
-//    avtools::FormatContextHandle initFormatContext(AVDictionary* pDict)
-//    {
-//        assert(pDict);
-//        avdevice_register_all();    // Register devices
-//        //        av_register_all();          // Register codecs - his is deprecated for ffmpeg >4.0
-//        AVFormatContext* p = nullptr;
-//        AVInputFormat *pFormat = nullptr;
-//        // Get the input format
-//        const AVDictionaryEntry* pDriver = av_dict_get(pDict, "driver", nullptr, 0);
-//        if (pDriver)
-//        {
-//            pFormat = av_find_input_format(pDriver->value);
-//        }
-//
-//        assert(av_dict_get(pDict, "url", nullptr, 0));    //url must be provided
-//        const char* url = av_dict_get(pDict, "url", nullptr, 0)->value;
-//        int status = avformat_open_input( &p, url, pFormat, &pDict );
-//        if( status < 0 )  // Couldn't open file
-//        {
-//            throw MediaError("Could not open " + std::string(url), status);
-//        }
-//        assert(p);
-//        return avtools::FormatContextHandle(p, [](AVFormatContext* pp) {avformat_close_input(&pp); });
-//    }
-}
 
 namespace avtools
 {
@@ -80,7 +51,7 @@ namespace avtools
         /// @param[in] url url or filename to open
         /// @param[in] pFmt ptr to input format. If none is provided, it is guessed from the url
         /// @param[in] pDict pointer to a ddictionary that has entries used for opening the url, such as framerate.
-        Implementation(const std::string& url, AVInputFormat* pFmt, AVDictionary* pDict):
+        Implementation(const std::string& url, AVInputFormat* pFmt, AVDictionary*& pDict):
         formatCtx_(FormatContext::INPUT),
         codexCtx_(),
         pkt_(),
@@ -126,9 +97,10 @@ namespace avtools
                 {
                     throw MediaError("Unable to initialize codec context " , ret);
                 }
-                AVDictionary *codecOpts = nullptr;   //codec options
-                av_dict_set(&codecOpts, "refcounted_frames", "1", 0);
-                ret = avcodec_open2(codexCtx_.get(), pCodec, &codecOpts);
+
+                Dictionary codecOpts;
+                codecOpts.add("refcounted_frames", 1);
+                ret = avcodec_open2(codexCtx_.get(), pCodec, &codecOpts.get());
                 if (ret < 0)
                 {
                     throw MediaError("Unable to open decoding codec" , ret);
@@ -143,24 +115,16 @@ namespace avtools
             {
                 throw MediaError("Unable to open any video streams");
             }
-#ifndef NDEBUG
-            CharBuf buf;
-            ret = av_dict_get_string(pDict, &buf.get(), '\t', '\n');
-            if (ret < 0)
-            {
-                LOGE("Could not get unused options: ", av_err2str(ret));
-            }
-            LOGD("Unused options while opening MediaReader:", buf.get());
-#endif
         }
 
         static std::unique_ptr<Implementation> Open(const std::string& url)
         {
             avdevice_register_all();    // Register devices
-            return std::make_unique<Implementation>(url, nullptr, nullptr);
+            Dictionary tmp;
+            return std::make_unique<Implementation>(url, nullptr, tmp.get());
         }
 
-        static std::unique_ptr<Implementation> Open(const std::string& url, const Dictionary& dict)
+        static std::unique_ptr<Implementation> Open(const std::string& url, Dictionary& dict)
         {
             avdevice_register_all();    // Register devices
             AVInputFormat *pFormat = nullptr;
@@ -172,13 +136,14 @@ namespace avtools
                     throw MediaError("Cannot determine input format for " + dict["driver"]);
                 }
             }
-            Dictionary tmpDict = dict;
-            return std::make_unique<Implementation>(url, pFormat, tmpDict.get());
+            auto pImpl =  std::make_unique<Implementation>(url, pFormat, dict.get());
+            return pImpl;
         }
 
         /// @return a list of opened streams
         const AVStream* stream() const
         {
+            assert(formatCtx_);
             assert( (stream_ >= 0) && (stream_ < formatCtx_->nb_streams) );
             return formatCtx_->streams[stream_];
         }
@@ -268,18 +233,22 @@ namespace avtools
         std::throw_with_nested( MediaError("MediaReader: Unable to open " + url) );
     }
     
-    MediaReader::MediaReader(const std::string& url, const Dictionary& opts) try:
-    pImpl_( Implementation::Open( url, opts ) )
+    MediaReader::MediaReader(const std::string& url, Dictionary& dict) try:
+    pImpl_( Implementation::Open(url, dict))
     {
         assert (pImpl_);
         LOGD(logging::LINE_SINGLE, "Opened video stream:", *getVideoStream(), "\n", logging::LINE_SINGLE);
+#ifndef NDEBUG
+        {
+            LOGD("Unused options while opening MediaReader:\n", dict.as_string());
+        }
+#endif
+
     }
     catch (std::exception& err)
     {
         std::throw_with_nested( MediaError("MediaReader: Unable to open " + url) );
     }
-
-
 
     MediaReader::~MediaReader() = default;
     

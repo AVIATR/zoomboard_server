@@ -175,8 +175,27 @@ namespace avtools
         if (!pPkt)  //freshly allocated packet
         {
             av_init_packet(pPkt_);
-            pPkt_->data = nullptr;
+            pPkt_->data = nullptr;  //no data buffers allocated yet
             pPkt_->size = 0;
+        }
+    }
+
+    Packet::Packet(const Packet& pkt):
+    Packet(pkt.get())
+    {
+    }
+
+    Packet::Packet(std::uint8_t* data, int len):
+    Packet(nullptr)
+    {
+        int ret = av_packet_from_data(pPkt_, data, len);
+        if (ret < 0)
+        {
+            if (pPkt_)
+            {
+                av_packet_free(&pPkt_);
+            }
+            throw MediaError("Packet: Unable to allocate packet from data.", ret);
         }
     }
 
@@ -198,6 +217,20 @@ namespace avtools
     // AVDictionary wrapper
     // -------------------------------------------------
 
+    Dictionary::Dictionary(const AVDictionary* pDict/*=nullptr*/):
+    pDict_( nullptr )
+    {
+        if (pDict)
+        {
+            int ret = av_dict_copy(&pDict_, pDict, 0);
+            if (ret < 0)
+            {
+                throw MediaError("Unable to clone dictionary.");
+            }
+            assert(pDict_);
+        }
+    }
+
     Dictionary::~Dictionary()
     {
         if (pDict_)
@@ -208,7 +241,6 @@ namespace avtools
     
     void Dictionary::add(const std::string& key, const std::string& value)
     {
-        assert(pDict_);
         int ret = av_dict_set(&pDict_, key.c_str(), value.c_str(), 0);
         if (ret < 0)
         {
@@ -218,7 +250,6 @@ namespace avtools
     
     void Dictionary::add(const std::string& key, std::int64_t value)
     {
-        assert(pDict_);
         int ret = av_dict_set_int(&pDict_, key.c_str(), value, 0);
         if (ret < 0)
         {
@@ -247,24 +278,23 @@ namespace avtools
         assert(pDict_);
         return av_dict_get(pDict_, key.c_str(), nullptr, 0);
     }
-    
-    /// Clones a dictionary. Any entries in this dictionary are lost.
-    /// @param[in] dict source dictionary
-    Dictionary& Dictionary::operator=(const Dictionary& dict)
+
+    std::string Dictionary::as_string(const char keySep/*='\t'*/, const char entrySep/*='\n'*/) const
     {
+        CharBuf buf;
         if (pDict_)
         {
-            av_dict_free(&pDict_);
-            pDict_ = nullptr;
+            int ret = av_dict_get_string(pDict_, &buf.get(), keySep, entrySep);
+            if (ret < 0)
+            {
+                throw MediaError("Dictionary: Could not get unused options", ret);
+            }
         }
-        int ret = av_dict_copy(&pDict_, dict.get(), 0);
-        if (ret < 0)
-        {
-            throw MediaError("Unable to clone dictionary.");
-        }
-        return *this;
+        return (buf ? std::string(buf.get()) : std::string());
     }
 
+
+    
     // -------------------------------------------------
     // AVCodecContext wrapper
     // -------------------------------------------------
@@ -276,7 +306,26 @@ namespace avtools
             throw MediaError("CodecContext: Unable to allocate codec context.");
         }
     }
-    
+
+    CodecContext::CodecContext(const CodecParameters& cp):
+    CodecContext(nullptr)
+    {
+        int ret = avcodec_parameters_to_context(pCC_, cp.get());
+        if (ret < 0)
+        {
+            if (pCC_)
+            {
+                avcodec_free_context(&pCC_);
+            }
+            throw MediaError("CodecContext: Unable to clone codec parameters", ret);
+        }
+    }
+
+    CodecContext::CodecContext(const CodecContext& cc):
+    CodecContext(CodecParameters(cc))
+    {
+    }
+
     CodecContext::~CodecContext()
     {
         if (pCC_)
@@ -300,21 +349,24 @@ namespace avtools
     // -------------------------------------------------
     // AVCodecParameters wrapper
     // -------------------------------------------------
-    CodecParameters::CodecParameters():
+    CodecParameters::CodecParameters(const AVCodecContext* pCC/*=nullptr*/):
     pParam_(avcodec_parameters_alloc())
     {
         if (!pParam_)
         {
             throw MediaError("CodecParameters: Unable to allocate parameters.");
         }
-    }
-    
-    CodecParameters::CodecParameters(const AVCodecContext* pCC)
-    {
-        int ret = avcodec_parameters_from_context(pParam_, pCC);
-        if (ret < 0)
+        if (pCC)
         {
-            throw MediaError("Unable to determine codec parameters from codec context", ret);
+            int ret = avcodec_parameters_from_context(pParam_, pCC);
+            if (ret < 0)
+            {
+                if (pParam_)
+                {
+                    avcodec_parameters_free(&pParam_);
+                }
+                throw MediaError("CodecParameters: Unable to determine codec parameters from codec context", ret);
+            }
         }
     }
 
@@ -323,13 +375,14 @@ namespace avtools
     {
     }
 
-    CodecParameters::CodecParameters(const CodecParameters& cp)
+    CodecParameters::CodecParameters(const CodecParameters& cp):
+    CodecParameters()
     {
         assert(pParam_);
         int ret = avcodec_parameters_copy(pParam_, cp.get());
         if ( ret < 0 )
         {
-            throw MediaError("Unable to clone codec parameters", ret);
+            throw MediaError("CodecParameters: Unable to clone codec parameters", ret);
         }
     }
 
@@ -373,7 +426,7 @@ namespace avtools
             throw MediaError("Unable to allocate format context.");
         }
     }
-    
+
     FormatContext::~FormatContext()
     {
         if (pCtx_)

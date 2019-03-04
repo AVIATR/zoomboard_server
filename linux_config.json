@@ -1,7 +1,0 @@
-{
-    "driver": "v4l2",
-    "device": "/dev/video0",
-    "url": "localhost",
-    "fps": 5,
-    "resolution": "720p"
-}

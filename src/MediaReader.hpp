@@ -24,17 +24,26 @@ namespace avtools
     class MediaReader
     {
     public:
+        /// Input type
+        enum InputType
+        {
+            CAPTURE_DEVICE = 0,
+            FILE = 1
+        };
+
         /// Ctor that opens a file
         /// @param[in] url url of media file to open
+        /// @param[in] type whether the input is a file or a capture device
         /// @throw std::runtime_exception if there was an error opening the stream.
-        MediaReader(const std::string& url);
+        MediaReader(const std::string& url, InputType type=FILE);
 
         /// More general ctor
         /// @param[in] url url of media file to open
         /// @param[in, out] opts stream options to use, such as resolution & frame rate.
+        /// @param[in] type whether the input is a file or a capture device
         /// On return, this dictionary should contain the actual values used in opening.
         /// @throw std::runtime_exception if there was an error opening the stream.
-        MediaReader(const std::string& url, Dictionary& opts);
+        MediaReader(const std::string& url, Dictionary& opts, InputType type=FILE);
         
         /// Dtor
         ~MediaReader();
@@ -42,18 +51,12 @@ namespace avtools
         /// @return the first opened video stream
         const AVStream* getVideoStream() const;
         
-        /// Reads a frame
-        /// @param[out] pFrame pointer to frame. Will contain new frame upon return
-        /// @return pointer to the stream that the frame is from. Will be nullptr when finished reading without errors.
-        /// @throw std::exception if there was a problem reading frames.
-        [[deprecated]]
-        const AVStream* read(AVFrame const*& pFrame);
 
         /// Reads a frame
         /// @param[out] pFrame pointer to frame. Will contain new frame upon return
         /// @return pointer to the stream that the frame is from. Will be nullptr when finished reading without errors.
         /// @throw std::exception if there was a problem reading frames.
-        const AVStream* read(Frame const& frame);
+        const AVStream* read(Frame &frame);
 
     private:
         class Implementation;

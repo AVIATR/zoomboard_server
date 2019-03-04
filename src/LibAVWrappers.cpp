@@ -22,7 +22,8 @@ extern "C" {
 namespace
 {
     using avtools::MediaError;
-    
+    static const int ALIGNMENT = 32;
+
     void initVideoFrame(AVFrame* pFrame, int width, int height, AVPixelFormat format, AVColorSpace cs)
     {
         assert(pFrame);
@@ -68,9 +69,9 @@ namespace avtools
     // AVFrame wrapper
     // -------------------------------------------------
 
-    Frame::Frame(AVFrame* pFrame, AVMediaType type):
+    Frame::Frame(AVFrame* pFrame, AVMediaType typ/*=AVMEDIA_TYPE_UNKNOWN*/):
     pFrame_(pFrame ? pFrame : av_frame_alloc()),
-    type_(type)
+    type(typ)
     {
         if (!pFrame_)
         {
@@ -102,7 +103,7 @@ namespace avtools
             {
                 case AVMEDIA_TYPE_VIDEO:
                     initVideoFrame(pFrame_, cPar.width, cPar.height, (AVPixelFormat) cPar.format, cPar.color_space);
-                    type_ = AVMediaType::AVMEDIA_TYPE_VIDEO;
+                    type = AVMediaType::AVMEDIA_TYPE_VIDEO;
                     break;
                 default:    //may implement other types in the future
                     throw std::invalid_argument("Frames of type " + std::to_string(cPar.codec_type) + " are not implemented.");
@@ -115,13 +116,18 @@ namespace avtools
         }
     }
 
+    Frame::Frame(const CodecParameters& cPar):
+    Frame(*cPar.get())
+    {
+    }
+
     Frame::Frame(const Frame& frame):
     pFrame_( av_frame_clone(frame.get()) ),
-    type_(frame.type())
+    type(frame.type)
     {
         if (!pFrame_)
         {
-            type_ = AVMediaType::AVMEDIA_TYPE_UNKNOWN;
+            type = AVMediaType::AVMEDIA_TYPE_UNKNOWN;
             throw MediaError("Frame: Unable to clone frame.");
         }
     }
@@ -140,25 +146,26 @@ namespace avtools
         {
             av_frame_unref(pFrame_);
         }
-        type_ = AVMediaType::AVMEDIA_TYPE_UNKNOWN;
+        type = AVMediaType::AVMEDIA_TYPE_UNKNOWN;
         int ret = av_frame_ref(pFrame_, frame.get());
         if (ret < 0)
         {
             throw MediaError("Frame: Unable to add reference to frame.", ret);
         }
-        type_ = frame.type();
+        type = frame.type;
         return *this;
     }
 
     std::string Frame::info(int indent/*=0*/) const
     {
-        switch (type_)
+        assert(pFrame_);
+        switch (type)
         {
             case AVMEDIA_TYPE_VIDEO:
                 return getVideoFrameInfo(pFrame_, indent);
                 break;
             default:    //may implement other typews in the future
-                throw std::invalid_argument("Frames of type " + std::to_string(type_) + " are not implemented.");
+                throw std::invalid_argument("Frames of type " + std::to_string(type) + " are not implemented.");
         }
     }
 
@@ -298,7 +305,7 @@ namespace avtools
     // -------------------------------------------------
     // AVCodecContext wrapper
     // -------------------------------------------------
-    CodecContext::CodecContext(const AVCodec* pCodec/*=nullptr*/):
+    CodecContext::CodecContext(const AVCodec* pCodec):
     pCC_(avcodec_alloc_context3(pCodec))
     {
         if (!pCC_)
@@ -307,8 +314,33 @@ namespace avtools
         }
     }
 
+    CodecContext::CodecContext(const AVCodecContext* pCodecCtx):
+    CodecContext(pCodecCtx ? pCodecCtx->codec : (AVCodec*) nullptr)
+    {
+        assert(pCC_);
+        CodecParameters param;
+        int ret = avcodec_parameters_from_context(param.get(), pCodecCtx);
+        if (ret < 0)
+        {
+            if (pCC_)
+            {
+                avcodec_free_context(&pCC_);
+            }
+            throw MediaError("CodecContext: Unable to clone codec context", ret);
+        }
+        ret = avcodec_parameters_to_context(pCC_, param.get());
+        if (ret < 0)
+        {
+            if (pCC_)
+            {
+                avcodec_free_context(&pCC_);
+            }
+            throw MediaError("CodecContext: Unable to clone codec context", ret);
+        }
+    }
+
     CodecContext::CodecContext(const CodecParameters& cp):
-    CodecContext(nullptr)
+    CodecContext((AVCodec*)nullptr)
     {
         int ret = avcodec_parameters_to_context(pCC_, cp.get());
         if (ret < 0)
@@ -349,41 +381,68 @@ namespace avtools
     // -------------------------------------------------
     // AVCodecParameters wrapper
     // -------------------------------------------------
-    CodecParameters::CodecParameters(const AVCodecContext* pCC/*=nullptr*/):
+//    CodecParameters::CodecParameters(const AVCodecContext* pCC/*=nullptr*/):
+//    pParam_(avcodec_parameters_alloc())
+//    {
+//        if (!pParam_)
+//        {
+//            throw MediaError("CodecParameters: Unable to allocate parameters.");
+//        }
+//        if (pCC)
+//        {
+//            int ret = avcodec_parameters_from_context(pParam_, pCC);
+//            if (ret < 0)
+//            {
+//                if (pParam_)
+//                {
+//                    avcodec_parameters_free(&pParam_);
+//                }
+//                throw MediaError("CodecParameters: Unable to determine codec parameters from codec context", ret);
+//            }
+//        }
+//    }
+
+    CodecParameters::CodecParameters(const AVCodecParameters* pParam/*=nullptr*/):
     pParam_(avcodec_parameters_alloc())
     {
         if (!pParam_)
         {
             throw MediaError("CodecParameters: Unable to allocate parameters.");
         }
-        if (pCC)
+        if (pParam)
         {
-            int ret = avcodec_parameters_from_context(pParam_, pCC);
+            int ret = avcodec_parameters_copy(pParam_, pParam);
             if (ret < 0)
             {
                 if (pParam_)
                 {
                     avcodec_parameters_free(&pParam_);
                 }
-                throw MediaError("CodecParameters: Unable to determine codec parameters from codec context", ret);
+                throw MediaError("CodecParameters: Unable to clone codec parameters", ret);
             }
         }
     }
 
-    CodecParameters::CodecParameters(const CodecContext& cc):
-    CodecParameters(cc.get())
-    {
-    }
 
-    CodecParameters::CodecParameters(const CodecParameters& cp):
+    CodecParameters::CodecParameters(const CodecContext& cc):
     CodecParameters()
     {
         assert(pParam_);
-        int ret = avcodec_parameters_copy(pParam_, cp.get());
-        if ( ret < 0 )
+        int ret = avcodec_parameters_from_context(pParam_, cc.get());
+        if (ret < 0)
         {
+            if (pParam_)
+            {
+                avcodec_parameters_free(&pParam_);
+            }
             throw MediaError("CodecParameters: Unable to clone codec parameters", ret);
         }
+
+    }
+
+    CodecParameters::CodecParameters(const CodecParameters& cp):
+    CodecParameters(cp.get())
+    {
     }
 
     CodecParameters::~CodecParameters()
@@ -516,6 +575,7 @@ namespace avtools
     (int inW, int inH, AVPixelFormat inFmt, int outW, int outH, AVPixelFormat outFmt):
     pConvCtx_(sws_getContext(inW, inH, inFmt, outW, outH, outFmt, 0, nullptr, nullptr, nullptr))//flags = 0, srcfilter=dstfilter=nullptr, param=nullptr
     {
+        assert (sws_isSupportedInput(inFmt) && sws_isSupportedOutput(outFmt));
         if (!pConvCtx_)
         {
             throw MediaError("ImageConversionContext: Unable to initialize scaling context.");
@@ -527,6 +587,16 @@ namespace avtools
         if (pConvCtx_)
         {
             sws_freeContext(pConvCtx_);
+        }
+    }
+
+    void ImageConversionContext::convert(const Frame& inFrame, Frame& outFrame)
+    {
+        assert(pConvCtx_ && inFrame && outFrame);
+        int ret = sws_scale(pConvCtx_, inFrame->data, inFrame->linesize, 0, inFrame->height, outFrame->data, outFrame->linesize);
+        if (ret < 0)
+        {
+            throw MediaError("Error converting frame to output format.", ret);
         }
     }
 

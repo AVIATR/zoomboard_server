@@ -196,7 +196,7 @@ namespace avtools
             Dictionary& dict
         ):
         formatCtx_(FormatContext::OUTPUT),
-        codecCtx_(),
+        codecCtx_(CodecParameters(&codecParam)),
         pkt_()
         {
             assert (codecParam.codec_type == AVMEDIA_TYPE_VIDEO);

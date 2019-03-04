@@ -24,6 +24,20 @@ extern "C" {
 
 using avtools::MediaError;
 
+namespace
+{
+#ifdef __APPLE__ // MacOS
+    static const std::string INPUT_DRIVER = "avfoundation";
+#elif defined __gnu_linux__ // GNU/Linux
+    static const std::string INPUT_DRIVER = "v4l2";
+#elif defined _WIN32 //Windows
+    #error "Windows inputs not yet implemented."
+#else
+    #error "Unknown operating system"
+#endif
+
+}
+
 namespace avtools
 {
     //==========================================
@@ -43,7 +57,6 @@ namespace avtools
         FormatContext               formatCtx_;        ///< Format I/O context
         CodecContext                codexCtx_;         ///< codec context for the video codec context of opened stream
         Packet                      pkt_;              ///< packet to be used for reading from file
-        Frame                       frame_;            ///< decoded video frame data
         int                         stream_;           ///< Index of the opened video stream
 
     public:
@@ -53,9 +66,8 @@ namespace avtools
         /// @param[in] pDict pointer to a ddictionary that has entries used for opening the url, such as framerate.
         Implementation(const std::string& url, AVInputFormat* pFmt, AVDictionary*& pDict):
         formatCtx_(FormatContext::INPUT),
-        codexCtx_(),
+        codexCtx_((AVCodec*) nullptr),
         pkt_(),
-        frame_(),
         stream_(-1)
         {
             //        av_register_all();          // Register codecs - his is deprecated for ffmpeg >4.0
@@ -117,27 +129,33 @@ namespace avtools
             }
         }
 
-        static std::unique_ptr<Implementation> Open(const std::string& url)
+        static std::unique_ptr<Implementation> OpenFile(const std::string& url, Dictionary& dict)
         {
             avdevice_register_all();    // Register devices
-            Dictionary tmp;
-            return std::make_unique<Implementation>(url, nullptr, tmp.get());
+            return std::make_unique<Implementation>(url, nullptr, dict.get());
         }
 
-        static std::unique_ptr<Implementation> Open(const std::string& url, Dictionary& dict)
+        static std::unique_ptr<Implementation> OpenFile(const std::string& url)
+        {
+            Dictionary tmp;
+            return OpenFile(url, tmp);
+        }
+
+        static std::unique_ptr<Implementation> OpenStream(const std::string& url, Dictionary& dict)
         {
             avdevice_register_all();    // Register devices
-            AVInputFormat *pFormat = nullptr;
-            if (dict.has("driver"))
+            AVInputFormat *pFormat = av_find_input_format(INPUT_DRIVER.c_str());
+            if (!pFormat)
             {
-                pFormat = av_find_input_format(dict["driver"].c_str());
-                if (!pFormat)
-                {
-                    throw MediaError("Cannot determine input format for " + dict["driver"]);
-                }
+                throw MediaError("Cannot determine input format for " + INPUT_DRIVER);
             }
-            auto pImpl =  std::make_unique<Implementation>(url, pFormat, dict.get());
-            return pImpl;
+            return std::make_unique<Implementation>(url, pFormat, dict.get());
+        }
+
+        static std::unique_ptr<Implementation> OpenStream(const std::string& url)
+        {
+            Dictionary tmp;
+            return OpenStream(url, tmp);
         }
 
         /// @return a list of opened streams
@@ -155,7 +173,7 @@ namespace avtools
         /// @param[out] pFrame pointer to frame. Will contain new frame upon return
         /// @return pointer to the stream that the frame is from. Will be nullptr when finished reading without errors.
         /// @throw MMError if there was a problem reading frames.
-        const AVStream* read(AVFrame const *& pFrame)
+        const AVStream* read(Frame& frame)
         {
             assert(stream_ >= 0);    //Otherwise stream is closed and we shouldn't be calling this
             int ret;
@@ -166,7 +184,6 @@ namespace avtools
                 if (AVERROR_EOF == ret)
                 {
                     LOGD("Reached end of file. Closing.");
-                    pFrame = nullptr;
                     return nullptr;
                 }
                 else if (ret < 0)
@@ -178,7 +195,7 @@ namespace avtools
                 {
                     LOGD("Skipping packet from undecoded stream.");
                     pkt_.unref();
-                    return read(pFrame);
+                    return read(frame);
                 }
                 //Valid packet & decoder - send packet to decoder
                 ret = avcodec_send_packet(codexCtx_.get(), pkt_.get());
@@ -189,28 +206,25 @@ namespace avtools
             }
             // Receive decoded frame if available
             assert (stream == stream_);
-            ret = avcodec_receive_frame(codexCtx_.get(), frame_.get());
+            ret = avcodec_receive_frame(codexCtx_.get(), frame.get());
             switch (ret)
             {
                 case 0:
-                    if (frame_->pts == AV_NOPTS_VALUE)
+                    if (frame->pts == AV_NOPTS_VALUE)
                     {
-                        frame_->pts = frame_->best_effort_timestamp;
+                        frame->pts = frame->best_effort_timestamp;
                     }
-                    pFrame = frame_.get();
+                    frame.type = AVMEDIA_TYPE_VIDEO;
                     return formatCtx_->streams[stream_];
                 case AVERROR(EAGAIN):   //more packets need to be read & sent to the decoder before decoding
                     pkt_.unref();
-                    return read(pFrame);
+                    return read(frame);
                 case AVERROR(EOF):
-                    LOGW("StreamDecoder: End of file, no more frames to receive.");
-                    pFrame = nullptr;
+                    LOGD("StreamDecoder: End of file, no more frames to receive.");
                     return nullptr;
                 case AVERROR(EINVAL):
-                    pFrame = nullptr;
                     throw MediaError("Codec not opened, or it is an encoder");
                 default:
-                    pFrame = nullptr;
                     throw MediaError("Decoding error.", ret);
             }
         }
@@ -222,8 +236,8 @@ namespace avtools
     //
     //==========================================
     
-    MediaReader::MediaReader(const std::string& url) try:
-    pImpl_( Implementation::Open(url) )
+    MediaReader::MediaReader(const std::string& url, InputType type/*=InputType::FILE*/) try:
+    pImpl_( type == InputType::FILE ? Implementation::OpenFile(url) : Implementation::OpenStream(url) )
     {
         assert (pImpl_);
         LOGD(logging::LINE_SINGLE, "Opened video stream:", *getVideoStream(), "\n", logging::LINE_SINGLE);
@@ -233,8 +247,8 @@ namespace avtools
         std::throw_with_nested( MediaError("MediaReader: Unable to open " + url) );
     }
     
-    MediaReader::MediaReader(const std::string& url, Dictionary& dict) try:
-    pImpl_( Implementation::Open(url, dict))
+    MediaReader::MediaReader(const std::string& url, Dictionary& dict, InputType type/*=InputType::FILE*/) try:
+    pImpl_( type == InputType::FILE ? Implementation::OpenFile(url, dict) : Implementation::OpenStream(url, dict))
     {
         assert (pImpl_);
         LOGD(logging::LINE_SINGLE, "Opened video stream:", *getVideoStream(), "\n", logging::LINE_SINGLE);
@@ -252,12 +266,12 @@ namespace avtools
 
     MediaReader::~MediaReader() = default;
     
-    const AVStream* MediaReader::read(AVFrame const*& pFrame)
+    const AVStream* MediaReader::read(Frame & frame)
     {
         assert(pImpl_);
         try
         {
-            const AVStream* pStr = pImpl_->read(pFrame);
+            const AVStream* pStr = pImpl_->read(frame);
             if (!pStr) //eof
             {
                 LOGD("End of stream reached. closing MediaReader.");

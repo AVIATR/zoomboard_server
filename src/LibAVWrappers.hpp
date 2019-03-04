@@ -26,13 +26,15 @@ struct SwsContext;
 
 namespace avtools
 {
+    class CodecParameters;  //forward declaraion
+
     /// @class Wrapper around AVFrame
     class Frame
     {
     private:
         AVFrame* pFrame_;                                       ///< ptr to wrapped frame
-        AVMediaType type_;                                      ///< type of frame if data buffers are initialized
     public:
+        AVMediaType type;                                       ///< type of frame if data buffers are initialized
         /// Ctor that wraps around an frame
         /// @param[in] pFrame ptr to a preallocated frame, or nullptr if one should be internally allocated
         /// @param[in] type type of the data that this frame is expected to contain.
@@ -43,7 +45,12 @@ namespace avtools
         /// @param[in] codecPar codec parameters
         /// @throw StreamError if the constructor was unable to allocate a frame
         Frame(const AVCodecParameters& codecPar);
-        
+
+        /// Ctor that allocates a frame according the provided codec parameters
+        /// @param[in] codecPar codec parameters
+        /// @throw StreamError if the constructor was unable to allocate a frame
+        Frame(const CodecParameters& codecPar);
+
         /// Allocates a video frame with a given size, format and sample rate.
         /// Basically combines av_frame_alloc() and initVideoFrame()
         /// @param[in] width how wide the image is in pixels
@@ -72,9 +79,6 @@ namespace avtools
 
         ///@return a chainable ptr to the AVFrame
         inline const AVFrame* operator->() const {return pFrame_;}
-
-        /// @return the type of the frame if buffers are initialized. If not, returns AVMEDIA_TYPE_UNKNOWN
-        inline AVMediaType type() const noexcept {return type_;}
 
         /// @return true if the underlying ptr is non-null
         explicit inline operator bool() const {return (pFrame_ != nullptr); }
@@ -191,7 +195,6 @@ namespace avtools
         inline Dictionary& operator=(const Dictionary& dict) = delete;
     };  //avtools::Dictionary
     
-    class CodecParameters;
     /// @class Wrapper around AVCodecContext
     class CodecContext
     {
@@ -200,8 +203,12 @@ namespace avtools
     public:
         /// Ctor
         /// @param[in] pCodec pointer to the codec to use
-        CodecContext(const AVCodec* pCodec=nullptr);
-        
+        explicit CodecContext(const AVCodec* pCodec);
+
+        /// Ctor
+        /// @param[in] pCodec pointer to the codec to use
+        explicit CodecContext(const AVCodecContext* pCodec);
+
         /// Ctor
         /// @param[in] param codec parameters to use
         CodecContext(const CodecParameters& param);
@@ -246,8 +253,12 @@ namespace avtools
     public:
         /// Ctor
         /// @param[in] pCC pointer to a codec context
-        CodecParameters(const AVCodecContext* pCC = nullptr);
-        
+//        explicit CodecParameters(const AVCodecContext* pCC = nullptr);
+
+        /// Ctor
+        /// @param[in] pCC pointer to a codec context
+        explicit CodecParameters(const AVCodecParameters* pParam=nullptr);
+
         /// Ctor
         /// @param[in] cc codec context to initialize parameters from
         CodecParameters(const CodecContext& cc);
@@ -393,6 +404,11 @@ namespace avtools
         inline const SwsContext* get() const {return pConvCtx_;} ///< @return the underlying ptr
         /// @return true if the underlying ptr is non-null
         explicit inline operator bool() const {return (pConvCtx_ != nullptr); }
+
+        /// Converts an input video frame to an output video frame with the same format this context was initialized with
+        /// @param[in] inFrame input video frame
+        /// @param[in] outFrame output video frame
+        void convert(const Frame& inFrame, Frame& outFrame);
 
     };  // avtools::ImageConversionContext
 } //::avtools

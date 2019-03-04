@@ -1,7 +1,0 @@
-{
-    "driver": "avfoundation",
-    "device": "0",
-    "url": "localhost",
-    "fps": 30,
-    "resolution": "qvga"
-}

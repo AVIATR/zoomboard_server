@@ -113,7 +113,8 @@ int main(int argc, const char * argv[])
         }
         imgFmtConvertor = std::make_unique<avtools::ImageConversionContext>(*reader.getVideoStream()->codecpar, *outParam.get());
     }
-    while (true)
+    cv::namedWindow("Converted image");
+    while (cv::waitKey(1) < 0)
     {
         const AVStream* pS = reader.read(inputFrame);
         if (!pS)
@@ -135,6 +136,8 @@ int main(int argc, const char * argv[])
         {
             img = getImage(inputFrame);
         }
+        LOGD("Image info:", img.size);
+        cv::imshow("Converted image", img);
     }
 
     // -----------

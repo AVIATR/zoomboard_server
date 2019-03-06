@@ -10,6 +10,8 @@
 #include <string>
 #include <algorithm>
 #include <vector>
+#include <mutex>
+#include <thread>
 #include "version.h"
 #include "MediaReader.hpp"
 #include "MediaWriter.hpp"
@@ -80,9 +82,16 @@ namespace
         const std::string name_;
         int draggedPt_;
         std::mutex  mutex_;
-        static void Callback(int event, int x, int y, int flags, void* userdata);   //cv::MouseCallback
+        std::unique_ptr<avtools::ImageConversionContext> hConvCtx_;
+        avtools::Frame  inputFrame_;
+        avtools::Frame  convFrame_;
+        cv::Mat img_;
+
+        /// @override cv::MouseCallback
+        static void Callback(int event, int x, int y, int flags, void* userdata);
     public:
-        DisplayWindow(const std::string& winName);
+        DisplayWindow(const std::string& winName, const avtools::CodecParameters& frameParams);
+        void launch(avtools::MediaReader& reader);
         void display(avtools::Frame& frame) const;
     };
 } //::<anon>
@@ -110,48 +119,9 @@ int main(int argc, const char * argv[])
     // -----------
     avtools::MediaReader reader(inOpts.url, inOpts.streamOptions, avtools::MediaReader::InputType::CAPTURE_DEVICE);
     LOGD("Opened input stream.");
-    avtools::Frame inputFrame(nullptr, AVMEDIA_TYPE_VIDEO);
-    avtools::Frame outFrame;
-    AVPixelFormat inPixFmt = (AVPixelFormat) reader.getVideoStream()->codecpar->format;
-    std::unique_ptr<avtools::ImageConversionContext> imgFmtConvertor = nullptr;
-    if (inPixFmt != AV_PIX_FMT_BGR24)
-    {
-        assert (sws_isSupportedOutput(AV_PIX_FMT_BGR24));
-        avtools::CodecParameters outParam(reader.getVideoStream()->codecpar);
-        outParam->format = AV_PIX_FMT_BGR24;    //corresponds to the BGR24 format used by OpenCV
-        LOGD("Output parameters: ", *outParam.get());
-        outFrame = avtools::Frame(outParam);
-
-        if (!sws_isSupportedInput(inPixFmt))
-        {
-            throw MediaError("Unsupported input pixel format " + std::to_string(inPixFmt));
-        }
-        imgFmtConvertor = std::make_unique<avtools::ImageConversionContext>(*reader.getVideoStream()->codecpar, *outParam.get());
-    }
-    DisplayWindow win("Camera image");
-    while (cv::waitKey(5) < 0)
-    {
-        const AVStream* pS = reader.read(inputFrame);
-        if (!pS)
-        {
-            LOGD("End of stream reached.");
-            break;
-        }
-        LOGD("Video Frame, time: ", avtools::calculateTime(inputFrame->best_effort_timestamp - pS->start_time, pS->time_base));
-        LOGD("Input frame info:\n", inputFrame.info(1));
-        cv::Mat img;
-        if (imgFmtConvertor)    //image format needs to be converted to BGR24
-        {
-            LOGD("Output frame info:\n", outFrame.info(1));
-            av_frame_copy_props(outFrame.get(), inputFrame.get());
-            imgFmtConvertor->convert(inputFrame, outFrame);
-            win.display(outFrame);
-        }
-        else
-        {
-            win.display(inputFrame);
-        }
-    }
+    avtools::CodecParameters codecParams(reader.getVideoStream()->codecpar);
+    DisplayWindow win("Camera image", codecParams);
+    win.launch(reader);
 
     // -----------
     // Get calibration matrix
@@ -335,11 +305,43 @@ namespace
     }
 
 
-    DisplayWindow::DisplayWindow(const std::string& winName):
+    void readLoop(avtools::MediaReader& rdr, std::mutex& mutex, avtools::Frame& frame)
+    {
+        while (true)
+        {
+            {
+                std::lock_guard<std::mutex> lock(mutex);
+                const AVStream* pS = rdr.read(frame);
+                if (!pS)
+                {
+                    break;
+                }
+            }
+        }
+        LOGD("End of stream reached.");
+    };
+
+    DisplayWindow::DisplayWindow(const std::string& winName, const avtools::CodecParameters& frameParams):
     corners_(),
     name_(winName),
-    draggedPt_(-1)
+    draggedPt_(-1),
+    mutex_(),
+    hConvCtx_(frameParams->format == AVPixelFormat::AV_PIX_FMT_BGR24 ?
+              nullptr :
+              std::make_unique<avtools::ImageConversionContext>(frameParams->width, frameParams->height, (AVPixelFormat) frameParams->format,
+                                                                frameParams->width, frameParams->height, AV_PIX_FMT_BGR24)),
+    inputFrame_(frameParams),
+    convFrame_(frameParams->format == AVPixelFormat::AV_PIX_FMT_BGR24 ?
+               avtools::Frame(inputFrame_) :
+               avtools::Frame(frameParams->width, frameParams->height, AV_PIX_FMT_BGR24)),
+    img_(getImage(convFrame_))
     {
+        AVPixelFormat format = (AVPixelFormat) frameParams->format;
+        if (!sws_isSupportedInput(format))
+        {
+            throw MediaError("Unsupported input pixel format " + std::to_string(format));
+        }
+
         cv::namedWindow(name_);
         cv::setMouseCallback(name_, DisplayWindow::Callback, this );
     }
@@ -408,4 +410,28 @@ namespace
         cv::imshow(name_, img);
     }
 
+    void DisplayWindow::launch(avtools::MediaReader &reader)
+    {
+//        std::thread tReader(readLoop, std::ref(reader), std::ref(mutex_), std::ref(inputFrame_));
+        while (cv::waitKey(5) < 0)
+        {
+            const AVStream* pS = reader.read(inputFrame_);
+            if (!pS)
+            {
+                LOGD("End of stream reached.");
+                break;
+            }
+            LOGD("Video Frame, time: ", avtools::calculateTime(inputFrame_->best_effort_timestamp - pS->start_time, pS->time_base));
+            LOGD("Input frame info:\n", inputFrame_.info(1));
+            cv::Mat img;
+            if (hConvCtx_)    //image format needs to be converted to BGR24
+            {
+                LOGD("Output frame info:\n", convFrame_.info(1));
+                av_frame_copy_props(convFrame_.get(), inputFrame_.get());
+                hConvCtx_->convert(inputFrame_, convFrame_);
+            }
+            display(convFrame_);
+        }
+//        tReader.join();
+    }
 }   //::<anon>

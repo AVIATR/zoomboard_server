@@ -70,6 +70,21 @@ namespace
     /// @return a cv::Size containing the width and height parsed from sizeStr
     /// @throw std::runtime_error if the frame size info could not be extracted
     cv::Size getDims(const std::string& sizeStr);
+
+    /// Structure that creates the window to display the frames and captures the four corners of the
+    /// board or other planar object to rectify
+    class DisplayWindow
+    {
+    private:
+        std::vector<cv::Point> corners_;
+        const std::string name_;
+        int draggedPt_;
+        std::mutex  mutex_;
+        static void Callback(int event, int x, int y, int flags, void* userdata);   //cv::MouseCallback
+    public:
+        DisplayWindow(const std::string& winName);
+        void display(avtools::Frame& frame) const;
+    };
 } //::<anon>
 
 // The command we are trying to implement for one output stream is
@@ -113,8 +128,8 @@ int main(int argc, const char * argv[])
         }
         imgFmtConvertor = std::make_unique<avtools::ImageConversionContext>(*reader.getVideoStream()->codecpar, *outParam.get());
     }
-    cv::namedWindow("Converted image");
-    while (cv::waitKey(1) < 0)
+    DisplayWindow win("Camera image");
+    while (cv::waitKey(5) < 0)
     {
         const AVStream* pS = reader.read(inputFrame);
         if (!pS)
@@ -130,14 +145,12 @@ int main(int argc, const char * argv[])
             LOGD("Output frame info:\n", outFrame.info(1));
             av_frame_copy_props(outFrame.get(), inputFrame.get());
             imgFmtConvertor->convert(inputFrame, outFrame);
-            img = getImage(outFrame);
+            win.display(outFrame);
         }
         else
         {
-            img = getImage(inputFrame);
+            win.display(inputFrame);
         }
-        LOGD("Image info:", img.size);
-        cv::imshow("Converted image", img);
     }
 
     // -----------
@@ -167,89 +180,7 @@ int main(int argc, const char * argv[])
     LOGD("Exiting successfully...");
     return EXIT_SUCCESS;
 
-//        //
-//        avtools::MultiMediaWriter mmWriter(outfile);
-//        if ( !mmWriter.isOpen() )
-//        {
-//            throw MMError("Transcoder: Unable to open " + outfile + " for writing");
-//        }
-//        // Add output audio stream
-//        int outAuStr=-1, outVidStr=-1;
-//        auto hAuOutCodecPar = getOutputAudioCodecParameters(*pAuStr->codecpar);
-//        assert(hAuOutCodecPar && (hAuOutCodecPar->codec_type == AVMEDIA_TYPE_AUDIO));
-//        assert(hAuOutCodecPar->codec_id == pAuStr->codecpar->codec_id);
-//        const AVStream* pStrOut = mmWriter.addStream(*hAuOutCodecPar, {1, hAuOutCodecPar->sample_rate});
-//        if (!pStrOut)
-//        {
-//            throw MMError("Transcoder: Unable to add audio stream to output file.");
-//        }
-//        assert(pStrOut->codecpar->codec_type == AVMEDIA_TYPE_AUDIO);
-//        outAuStr = pStrOut->index;
-//        //Open audio transcoder
-//        auto hAudioTranscoder = std::make_unique<AudioTranscoder>(*pAuStr->codecpar, *pStrOut->codecpar);
-//        if (!hAudioTranscoder)
-//        {
-//            throw MMError("Transcoder: Unable to open audio transcoder.");
-//        }
-//        assert ( (inAuStr >= 0) && (outAuStr >= 0) );
-//        LOGD("Transcoder: added output audio stream: ", inAuStr, "->", outAuStr);
-//
-//        // Add output video stream
-//        const AVStream* pVidStr = mmReader.getFirstVideoStream();
-//        int inVidStr = -1;
-//        if (pVidStr)
-//        {
-//            inVidStr = pVidStr->index;
-//            LOGD("Transcoder: found input video stream: ", inVidStr);
-//            const AVStream* pStrOut = mmWriter.addStream(*pVidStr->codecpar, pVidStr->time_base);
-//            if (!pStrOut)
-//            {
-//                throw MMError("Transcoder: Unable to add video stream to output file.");
-//            }
-//            outVidStr = pStrOut->index;
-//            assert ( (inVidStr >= 0) && (outVidStr >= 0) );
-//            LOGD("Transcoder: added output audio stream: ", inVidStr, "->", outVidStr);
-//        }
-//
-//        // Start reading and writing frames
-//        AVFrame const * pF = nullptr;
-//        const AVStream* pS = nullptr;
-//        while ((pS = mmReader.read(pF)))
-//        {
-//            assert(pF);
-//            const int stream = pS->index;
-//            if (stream == inAuStr)  //audio frame -> transcode & write
-//            {
-//                assert(hAudioTranscoder);
-//                hAudioTranscoder->push(pF);
-//                while (const AVFrame* pFTranscoded = hAudioTranscoder->pop())
-//                {
-//                    mmWriter.write(pFTranscoded, outAuStr);
-//                }
-//            }
-//            else if (stream == inVidStr) //video frame -> just write
-//            {
-//                mmWriter.write(pF, outVidStr);
-//            }
-//        }
-//        // EOF. Cleanup & write buffered data
-//        // Flush buffered data in transcoder
-//        hAudioTranscoder->push(nullptr);
-//        while (const AVFrame* pF = hAudioTranscoder->pop())
-//        {
-//            mmWriter.write(pF, outAuStr);
-//        }
-//        hAudioTranscoder.reset(nullptr);
-//        //signal eof to writer
-//        mmWriter.write(nullptr, -1);
-//    }
-//    catch(std::exception& e)
-//    {
-//        logging::print_exception(e);
-//        return EXIT_FAILURE;
-//    }
-//    LOGD("Exiting successfully...");
-//    return EXIT_SUCCESS;
+
 }
 
 namespace
@@ -375,8 +306,7 @@ namespace
 
     cv::Mat getImage(const avtools::Frame& frame)
     {
-        cv::Mat mat(frame->height, frame->width, CV_8UC3, frame->data[0], frame->linesize[0]);
-        return mat;
+        return cv::Mat(frame->height, frame->width, CV_8UC3, frame->data[0], frame->linesize[0]);
     }
 
     cv::Size getDims(const std::string& sizeStr)
@@ -403,4 +333,79 @@ namespace
         }
         return cv::Size( std::stoi(sizeStr.substr(0, sep)), std::stoi(sizeStr.substr(sep+1)) );
     }
+
+
+    DisplayWindow::DisplayWindow(const std::string& winName):
+    corners_(),
+    name_(winName),
+    draggedPt_(-1)
+    {
+        cv::namedWindow(name_);
+        cv::setMouseCallback(name_, DisplayWindow::Callback, this );
+    }
+
+    void DisplayWindow::Callback(int event, int x, int y, int flags, void *userdata)
+    {
+        DisplayWindow* myWin = static_cast<DisplayWindow*>(userdata);
+        auto& corners = myWin->corners_;
+        switch(event)
+        {
+            case cv::MouseEventTypes::EVENT_LBUTTONDOWN:
+                //See if we are near any existing markers
+                assert(myWin->draggedPt_ < 0);
+                for (int i = 0; i < corners.size(); ++i)
+                {
+                    const cv::Point& pt = corners[i];
+                    if (cv::abs(x-pt.x) + cv::abs(y - pt.y) < 10)
+                    {
+                        myWin->draggedPt_ = i;  //start dragging
+                        break;
+                    }
+                }
+                break;
+            case cv::MouseEventTypes::EVENT_MOUSEMOVE:
+                assert(myWin->draggedPt_ < (int) corners.size());
+                if ((flags & cv::MouseEventFlags::EVENT_FLAG_LBUTTON) && (myWin->draggedPt_ >= 0))
+                {
+                    corners[myWin->draggedPt_].x = x;
+                    corners[myWin->draggedPt_].y = y;
+                }
+                break;
+            case cv::MouseEventTypes::EVENT_LBUTTONUP:
+                assert(myWin->draggedPt_ < (int) corners.size());
+                if (myWin->draggedPt_ >= 0)
+                {
+                    corners[myWin->draggedPt_].x = x;
+                    corners[myWin->draggedPt_].y = y;
+                    myWin->draggedPt_ = -1; //end dragging
+                }
+                else if (corners.size() < 4)
+                {
+                    corners.emplace_back(x,y);
+                }
+                break;
+            default:
+                LOGD("Received mouse event: ", event);
+                break;
+        }
+    }
+
+    void DisplayWindow::display(avtools::Frame& frame) const
+    {
+        cv::Mat img = getImage(frame);
+        for (int i = 0; i < corners_.size(); ++i)
+        {
+            cv::drawMarker(img, corners_[i], cv::Scalar(0,0,255), cv::MarkerTypes::MARKER_SQUARE, 5);
+            cv::putText(img, std::to_string(i+1), corners_[i], cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(0,0,255));
+        }
+        if (corners_.size() == 4)
+        {
+            for (int i = 0; i < 4; ++i)
+            {
+                cv::line(img, corners_[i], corners_[(i+1) % 4], cv::Scalar(0,0, 255));
+            }
+        }
+        cv::imshow(name_, img);
+    }
+
 }   //::<anon>

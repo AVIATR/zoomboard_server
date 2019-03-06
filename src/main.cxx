@@ -78,7 +78,7 @@ namespace
     class DisplayWindow
     {
     private:
-        std::vector<cv::Point> corners_;
+        std::vector<cv::Point2f> corners_;
         const std::string name_;
         int draggedPt_;
         std::mutex  mutex_;
@@ -130,18 +130,13 @@ int main(int argc, const char * argv[])
     // -----------
     // Open the media reader
     // -----------
-//    avtools::MediaReader reader(inOpts.url, inOpts.streamOptions, avtools::MediaReader::InputType::CAPTURE_DEVICE);
-//    LOGD("Opened input stream.");
-//    avtools::CodecParameters codecParams(reader.getVideoStream()->codecpar);
-//
-//    avtools::Frame inputFrame(codecParams);
     DisplayWindow win("Camera image");
     std::thread readerThread(threadedRead, std::ref(inOpts), std::ref(win));
     while (cv::waitKey(10) < 0)
     {
         win.display();
     }
-    readerThread.join();
+//    readerThread.join();
 
     // -----------
     // Get calibration matrix
@@ -410,19 +405,30 @@ namespace
         {
             return;
         }
+        if (corners_.size() == 4)
+        {
+            const std::vector<cv::Point2f> TGT_CORNERS = {cv::Point2f(0,0), cv::Point2f(convFrame_->height, 0), cv::Point2f(convFrame_->height, convFrame_->width), cv::Point2f(0, convFrame_->height)};
+            cv::Mat trf = cv::getPerspectiveTransform(corners_, TGT_CORNERS);
+            cv::Mat warpedFrame_(convFrame_->height, convFrame_->width, CV_8UC3);
+            cv::warpPerspective(img_, warpedFrame_, trf, img_.size());
+            cv::imshow(name_+"_warped", warpedFrame_);
+        }
+
+        cv::Mat imgToDisplay = img_.clone();
         for (int i = 0; i < corners_.size(); ++i)
         {
-            cv::drawMarker(img_, corners_[i], cv::Scalar(0,0,255), cv::MarkerTypes::MARKER_SQUARE, 5);
-            cv::putText(img_, std::to_string(i+1), corners_[i], cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(0,0,255));
+            cv::drawMarker(imgToDisplay, corners_[i], cv::Scalar(0,0,255), cv::MarkerTypes::MARKER_SQUARE, 5);
+            cv::putText(imgToDisplay, std::to_string(i+1), corners_[i], cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(0,0,255));
         }
         if (corners_.size() == 4)
         {
             for (int i = 0; i < 4; ++i)
             {
-                cv::line(img_, corners_[i], corners_[(i+1) % 4], cv::Scalar(0,0, 255));
+                cv::line(imgToDisplay, corners_[i], corners_[(i+1) % 4], cv::Scalar(0,0, 255));
+                LOGD("Corner [", i+1, "] is at ", corners_[i]);
             }
         }
-        cv::imshow(name_, img_);
+        cv::imshow(name_, imgToDisplay);
     }
 
     void DisplayWindow::update(const avtools::Frame &frame)

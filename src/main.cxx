@@ -81,14 +81,20 @@ namespace
 //    /// also @see https://docs.opencv.org/3.1.0/da/d54/group__imgproc__transform.html
 //    cv::Mat getPerspectiveTransform(avtools::Frame& frame);
 
+    /// @class Threaded reader that uses a threaded observer pattern.
+    /// See https://stackoverflow.com/questions/39516416/using-weak-ptr-to-implement-the-observer-pattern
     class ThreadedReader
     {
     public:
+        /// @class virtual observer class
         struct Observer: public std::enable_shared_from_this<Observer>
         {
+            /// @param[in] new frame to provide when one is available
             virtual void notify(const avtools::Frame&) = 0;
             virtual ~Observer() = default;
         };
+
+        /// Static function to use for the new thread. may factor a bit
         static void Read(Options& opts, ThreadedReader& reader);
     private:
         std::mutex mutex_;  //mutex used to ensure that observers don't get removed mid-notification
@@ -96,7 +102,8 @@ namespace
     public:
         /// Ctor
         /// @param[in] opts options for the input stream
-        ThreadedReader(Options& opts);
+        ThreadedReader();
+        /// Dtor
         ~ThreadedReader() = default;
         /// Subscribers an observer to the threaded reader. The observer gets notified about the new
         /// frame when one is available
@@ -105,6 +112,11 @@ namespace
         /// Removes a previously subscribed observer
         /// @param[in] obs observer to remove from subcsribers. If nullptr, all defunt observers are unsusbcribed
         void unsubscribe(std::shared_ptr<Observer> obs=nullptr);
+
+        /// Launches a new reader thread
+        /// @param[in] opts stream options
+        /// @return the new thread
+        std::thread run(Options& opts);
     };
 
     /// Launches a window that allows the user to select the four corners of a plane
@@ -138,10 +150,8 @@ int main(int argc, const char * argv[])
     // -----------
     // Open the media reader
     // -----------
-//    DisplayWindow win("Camera image");
-//    std::thread readerThread(threadedRead, std::ref(inOpts), std::ref(win));
-    ThreadedReader reader(inOpts);
-    std::thread readerThread(ThreadedReader::Read, std::ref(inOpts), std::ref(reader));
+    ThreadedReader reader;
+    std::thread readerThread = reader.run(inOpts);
 
     // -----------
     // Get calibration matrix
@@ -353,9 +363,11 @@ namespace
         }
     }
 
-    ThreadedReader::ThreadedReader(Options& opts):
-    mutex_()
+    ThreadedReader::ThreadedReader() = default;
+
+    std::thread ThreadedReader::run(Options& opts)
     {
+        return std::thread(ThreadedReader::Read, std::ref(opts), std::ref(*this));
     }
 
     void ThreadedReader::subscribe(std::shared_ptr<Observer> obs)

@@ -22,7 +22,7 @@ extern "C" {
 namespace
 {
     using avtools::MediaError;
-    static const int ALIGNMENT = 32;
+//    static const int ALIGNMENT = 32;
 
     void initVideoFrame(AVFrame* pFrame, int width, int height, AVPixelFormat format, AVColorSpace cs)
     {

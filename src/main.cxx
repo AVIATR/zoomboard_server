@@ -56,9 +56,14 @@ namespace
     /// Parses a json file to retrieve the configuration to use
     /// @param[in] configFile name of configuration file to read
     /// @param[out] inputOptions a structure containing the input options to use
-    /// @param[out] outputOptions a structure containing the output stream options to use
+    /// @param[out] outputOptionsLowRes a structure containing the output stream options to use for the low-res stream
+    /// @param[out] outputOptionsHiRes a structure containing the output stream options to use for the hi-res stream
     /// @throw std::runtime_error if there is an issue parsing the configuration file.
-    void getOptions(const std::string& configFile, Options& inputOptions, Options& outputOptions);
+    void getOptions(const std::string& configFile,
+                    Options& inputOptions,
+                    Options& outputOptionsLowRes,
+                    Options& outputOptionsHiRes
+                    );
 
     /// Wraps a cv::mat around libav frames. Note that the matrix is just wrapped around the
     /// existing data, so data is not cloned. Make sure that the matrix is done being used before reading new
@@ -73,32 +78,23 @@ namespace
 //    /// @throw std::runtime_error if the frame size info could not be extracted
 //    cv::Size getDims(const std::string& sizeStr);
 
-//    /// Launches a window that allows the user to select the four corners of a plane
-//    /// This is then unwarped to get the required perspective
-//    /// @param[in] frame frame that will contain freshly read images
-//    /// @return a perspective transformation matrix. This can then be used with
-//    /// cv::warpPerspective to correct the perspective of the video.
-//    /// also @see https://docs.opencv.org/3.1.0/da/d54/group__imgproc__transform.html
-//    cv::Mat getPerspectiveTransform(avtools::Frame& frame);
+    /// @class virtual observer class
+    struct FrameObserver: public std::enable_shared_from_this<FrameObserver>
+    {
+        /// @param[in] new frame to provide when one is available
+        virtual void notify(const avtools::Frame&) = 0;
+        virtual ~FrameObserver() = default;
+    };
 
     /// @class Threaded reader that uses a threaded observer pattern.
     /// See https://stackoverflow.com/questions/39516416/using-weak-ptr-to-implement-the-observer-pattern
     class ThreadedReader
     {
-    public:
-        /// @class virtual observer class
-        struct Observer: public std::enable_shared_from_this<Observer>
-        {
-            /// @param[in] new frame to provide when one is available
-            virtual void notify(const avtools::Frame&) = 0;
-            virtual ~Observer() = default;
-        };
-
-        /// Static function to use for the new thread. may factor a bit
-        static void Read(Options& opts, ThreadedReader& reader);
     private:
         std::mutex mutex_;  //mutex used to ensure that observers don't get removed mid-notification
-        std::vector<std::weak_ptr<Observer>> observers_;
+        std::vector<std::weak_ptr<FrameObserver>> observers_;
+        /// Thread function to use.
+        void read(Options& opts);
     public:
         /// Ctor
         /// @param[in] opts options for the input stream
@@ -108,10 +104,10 @@ namespace
         /// Subscribers an observer to the threaded reader. The observer gets notified about the new
         /// frame when one is available
         /// @param[in] obs new observer to subscribe
-        void subscribe(std::shared_ptr<Observer> obs);
+        void subscribe(std::shared_ptr<FrameObserver> obs);
         /// Removes a previously subscribed observer
         /// @param[in] obs observer to remove from subcsribers. If nullptr, all defunt observers are unsusbcribed
-        void unsubscribe(std::shared_ptr<Observer> obs=nullptr);
+        void unsubscribe(std::shared_ptr<FrameObserver> obs=nullptr);
 
         /// Launches a new reader thread
         /// @param[in] opts stream options
@@ -145,8 +141,8 @@ int main(int argc, const char * argv[])
     }
 
     const std::string configFile = argv[1];
-    Options inOpts, outOpts;
-    getOptions(configFile, inOpts, outOpts);
+    Options inOpts, outOptsLoRes, outOptsHiRes;
+    getOptions(configFile, inOpts, outOptsLoRes, outOptsHiRes);
     // -----------
     // Open the media reader
     // -----------
@@ -161,11 +157,14 @@ int main(int argc, const char * argv[])
     // -----------
     // open transcoder & processor
     // -----------
+
     LOGX;
     
     // -----------
     // Open the output stream writers - one for lo-res, one for hi-res
     // -----------
+//    std::thread lowResWriterThread = writer.run(outOptsLoRes);
+//    std::thread hiResWriterThread = writer.run(outOptsHiRes);
     LOGX;
     
     // -----------
@@ -176,6 +175,8 @@ int main(int argc, const char * argv[])
     // -----------
     // Cleanup
     // -----------
+    //    readerThread.join();
+    //    writerThread.join();
     LOGX;
     LOGD("Exiting successfully...");
     return EXIT_SUCCESS;
@@ -263,44 +264,48 @@ namespace
         }
     }
 
-    void getOptions(const std::string& configFile, Options& inOpts, Options& outOpts)
+    void getOptions(const std::string& configFile, Options& inOpts, Options& outOptsLR, Options& outOptsHR)
     {
         cv::FileStorage fs(configFile, cv::FileStorage::READ);
         const auto rootNode = fs.root();
         // Read input options
-        bool isInputOptsFound = false, isOutputOptsFound = false;
-        for (auto it = rootNode.begin(); it != rootNode.end(); ++it)
+        auto it = std::find_if(rootNode.begin(), rootNode.end(),
+                               [](const cv::FileNode& node){return (node.name() == "input");});
+        if (it == rootNode.end())
         {
-            cv::FileNode node = *it;
-            if (node.name() == INPUT_DRIVER) //Found input options for this architecture
-            {
-                LOGD("Found input options for ", INPUT_DRIVER);
-                if (isInputOptsFound)
-                {
-                    throw std::runtime_error("Found multiple options for " + INPUT_DRIVER);
-                }
-                readFileNodeIntoOpts(node, inOpts);
-                isInputOptsFound = true;
-            }
-            else if (node.name() == "output")  //Found the output options
-            {
-                LOGD("Found output options.");
-                if (isOutputOptsFound)
-                {
-                    throw std::runtime_error("Found multiple output options");
-                }
-                readFileNodeIntoOpts(node, outOpts);
-                isOutputOptsFound = true;
-            }
+            throw std::runtime_error("Input options not found in " + configFile);
         }
-        if (!isInputOptsFound)
+        const auto inputsNode = *it;
+        it = std::find_if(inputsNode.begin(), inputsNode.end(),
+                          [](const cv::FileNode& node){return (node.name() == INPUT_DRIVER);});
+        if (it == inputsNode.end())
         {
             throw std::runtime_error("Unable to find input options for " + INPUT_DRIVER + " in " + configFile);
         }
-        if (!isOutputOptsFound)
+        readFileNodeIntoOpts(*it, inOpts);
+
+        // Read output options
+        it = std::find_if(rootNode.begin(), rootNode.end(),
+                          [](const cv::FileNode& node){return (node.name() == "output");});
+        if (it == rootNode.end())
         {
-            throw std::runtime_error("Unable to find output options in " + configFile);
+            throw std::runtime_error("Output options not found in " + configFile);
         }
+        const auto outputsNode = *it;
+        it = std::find_if(outputsNode.begin(), outputsNode.end(),
+                          [](const cv::FileNode& node){return (node.name() == "lores");});
+        if (it == outputsNode.end())
+        {
+            throw std::runtime_error("Unable to find lo-res output options for in " + configFile);
+        }
+        readFileNodeIntoOpts(*it, outOptsLR);
+        it = std::find_if(outputsNode.begin(), outputsNode.end(),
+                          [](const cv::FileNode& node){return (node.name() == "hires");});
+        if (it == outputsNode.end())
+        {
+            throw std::runtime_error("Unable to find hi-res output options for in " + configFile);
+        }
+        readFileNodeIntoOpts(*it, outOptsHR);
         fs.release();
     }
 
@@ -339,7 +344,7 @@ namespace
     // ---------------------------
     // Threaded Reader Definitions
     // ---------------------------
-    void ThreadedReader::Read(Options& opts, ThreadedReader& tRdr)
+    void ThreadedReader::read(Options& opts)
     {
         avtools::MediaReader reader(opts.url, opts.streamOptions, avtools::MediaReader::InputType::CAPTURE_DEVICE);
         avtools::Frame frame(*reader.getVideoStream()->codecpar);
@@ -348,9 +353,9 @@ namespace
         {
             LOGD("Input frame info:\n", frame.info(1));
             {
-                std::lock_guard<std::mutex> lock(tRdr.mutex_);
-                LOGD("There are ", tRdr.observers_.size(), " observers.");
-                for (auto& o: tRdr.observers_)
+                std::lock_guard<std::mutex> lock(this->mutex_);
+                LOGD("There are ", this->observers_.size(), " observers.");
+                for (auto& o: this->observers_)
                 {
                     if (auto p = o.lock())
                     {
@@ -359,7 +364,7 @@ namespace
                 }
             }
             //remove invalid observers
-            tRdr.unsubscribe();
+            this->unsubscribe();
         }
     }
 
@@ -367,23 +372,23 @@ namespace
 
     std::thread ThreadedReader::run(Options& opts)
     {
-        return std::thread(ThreadedReader::Read, std::ref(opts), std::ref(*this));
+        return std::thread(&ThreadedReader::read, this, std::ref(opts));
     }
 
-    void ThreadedReader::subscribe(std::shared_ptr<Observer> obs)
+    void ThreadedReader::subscribe(std::shared_ptr<FrameObserver> obs)
     {
         std::lock_guard<std::mutex> lock(mutex_);
         observers_.emplace_back(obs);
     }
 
-    void ThreadedReader::unsubscribe(std::shared_ptr<Observer> obs/*=nullptr*/)
+    void ThreadedReader::unsubscribe(std::shared_ptr<FrameObserver> obs/*=nullptr*/)
     {
         std::lock_guard<std::mutex> lock(mutex_);
         observers_.erase(
                          std::remove_if(
                                         observers_.begin(),
                                         observers_.end(),
-                                        [&obs](const std::weak_ptr<ThreadedReader::Observer>& o)
+                                        [&obs](const std::weak_ptr<FrameObserver>& o)
                                         {
                                             return o.expired() || o.lock() == obs;
                                         }),
@@ -397,7 +402,7 @@ namespace
 
     /// Structure that creates the window to display the frames and captures the four corners of the
     /// board or other planar object to rectify
-    class DisplayWindow: public ThreadedReader::Observer
+    class DisplayWindow: public FrameObserver
     {
     private:
         std::vector<cv::Point2f> corners_;                              ///< corners to use for perspective transformation
@@ -416,13 +421,16 @@ namespace
         /// @param[in] winName name of the window
         DisplayWindow(const std::string& winName);
 
+        /// Dtor
+        ~DisplayWindow();
+
         /// @param[in] new frame data
         void notify(const avtools::Frame& frame) override;
         /// Displays the latest acquired frame
         void display();
         /// Returns the current perspective transformation matrix
         const cv::Mat& getPerspectiveTransformationMatrix() const;
-    };
+    };  //<anon>::DisplayWindow
 
     DisplayWindow::DisplayWindow(const std::string& winName):
     corners_(),
@@ -437,6 +445,10 @@ namespace
         cv::setMouseCallback(name_, DisplayWindow::MouseCallback, this );
     }
 
+    DisplayWindow::~DisplayWindow()
+    {
+        LOGD("Removing display window");
+    }
     /// @override cv::MouseCallback
     void DisplayWindow::MouseCallback(int event, int x, int y, int flags, void *userdata)
     {
@@ -575,6 +587,7 @@ namespace
         {
             hWin->display();
         }
+        reader.unsubscribe(hWin);
         return hWin->getPerspectiveTransformationMatrix();
     }
 }   //::<anon>

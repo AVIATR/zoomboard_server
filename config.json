@@ -1,32 +1,48 @@
 {
-    "avfoundation":
+    "input":
     {
-        "url": "0",
-        "stream_options":
+        "avfoundation":
         {
-            "framerate": "30",
-            "video_size": "320x240",
-            "pixel_format": "rgb24"
-        }
-    },
-    "v4l2":
-    {
-        "url": "/dev/video0",
-        "stream_options":
+            "url": "0",
+            "stream_options":
+            {
+                "framerate": "30",
+                "video_size": "320x240",
+                "pixel_format": "rgb24"
+            }
+        },
+        "v4l2":
         {
-            "framerate": "30",
-            "video_size": "320x240",
-            "input_format": "rgb24"
+            "url": "/dev/video0",
+            "stream_options":
+            {
+                "framerate": "30",
+                "video_size": "320x240",
+                "input_format": "rgb24"
+            }
         }
     },
     "output":
     {
-        "url": "localhost",
-        "stream_options":
+        "lores":
         {
-            "framerate": "5",
-            "video_size": "320x240",
-            "pixel_format": "yuv420"
-        }
+            "url": "localhost",
+            "stream_options":
+            {
+                "framerate": "30",
+                "video_size": "320x240",
+                "pixel_format": "yuv420"
+            }
+        },
+        "hires":
+        {
+            "url": "localhost",
+            "stream_options":
+            {
+                "framerate": "5",
+                "video_size": "640x480",
+                "pixel_format": "yuv420"
+            }
+        }        
     }
 }

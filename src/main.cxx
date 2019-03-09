@@ -115,13 +115,70 @@ namespace
         std::thread run(Options& opts);
     };
 
-    /// Launches a window that allows the user to select the four corners of a plane
-    /// This is then unwarped to get the required perspective
-    /// @param[in] reader a threaded reader to subscribe to and receive read images from
-    /// @return a perspective transformation matrix. This can then be used with
+    /// @class Transformer class that asks the user to choose the corners of the board and undoes the
+    /// perspective transform. This can then be used with
     /// cv::warpPerspective to correct the perspective of the video.
     /// also @see https://docs.opencv.org/3.1.0/da/d54/group__imgproc__transform.html
-    const cv::Mat getPerspectiveTransform(ThreadedReader& reader);
+    /// Writer can subscribe to this to be notified when a new perspective-corrected frame is available.
+    class Transformer: public FrameObserver
+    {
+    private:
+        std::vector<cv::Point2f> corners_;                              ///< corners to use for perspective transformation
+        const std::string name_;                                        ///< name of window
+        int draggedPt_;                                                 ///< currently dragged point. -1 if none
+        std::mutex mutex_;                                              ///< mutex used for thread sync
+        std::vector<std::weak_ptr<FrameObserver>> observers_;           ///< list of observers/subscribers
+        std::unique_ptr<avtools::ImageConversionContext> hConvCtx_;     ///< conversion context if input is not in BGR24 format
+        avtools::Frame  convFrame_;                                     ///< frame to display
+        cv::Mat img_;                                                   ///< wrapper around frame to display
+        cv::Mat trfMatrix_;                                             ///< current transformation matrix
+
+        /// @override cv::MouseCallback
+        static void MouseCallback(int event, int x, int y, int flags, void* userdata);
+
+    public:
+        /// Ctor
+        /// @param[in] name of window
+        Transformer(const std::string& name);
+        /// Dtor
+        ~Transformer();
+        /// Subscribers an observer to the threaded reader. The observer gets notified about the new
+        /// frame when one is available
+        /// @param[in] obs new observer to subscribe
+        void subscribe(std::shared_ptr<FrameObserver> obs);
+        /// Removes a previously subscribed observer
+        /// @param[in] obs observer to remove from subcsribers. If nullptr, all defunt observers are unsusbcribed
+        void unsubscribe(std::shared_ptr<FrameObserver> obs=nullptr);
+        /// @param[in] new frame data
+        void notify(const avtools::Frame& frame) override;
+        /// Displays the latest acquired frame
+        void display();
+        /// Launches a window where the user can choose the coordinates of the board
+        void getBoardCoords();
+    };  //::<anon>::Transformer
+
+    /// @class Threaded writer.
+    class ThreadedWriter: public FrameObserver
+    {
+    private:
+        std::mutex mutex_;  //mutex used to ensure that observers don't get removed mid-notification
+        std::vector<std::weak_ptr<FrameObserver>> observers_;
+        /// Thread function to use.
+        void read(Options& opts);
+    public:
+        /// Ctor
+        /// @param[in] opts options for the output stream
+        ThreadedWriter(Options& opts);
+        /// Dtor
+        ~ThreadedWriter() = default;
+        /// @param[in] new frame data
+        void notify(const avtools::Frame& frame) override;
+
+        /// Launches a new reader thread
+        /// @param[in] opts stream options
+        /// @return the new thread
+        std::thread run(Options& opts);
+    };
 
 } //::<anon>
 
@@ -147,15 +204,19 @@ int main(int argc, const char * argv[])
     // Open the media reader
     // -----------
     ThreadedReader reader;
-    std::thread readerThread = reader.run(inOpts);
 
     // -----------
-    // Get calibration matrix
+    // Add transformer
     // -----------
-    const cv::Mat trfMatrix = getPerspectiveTransform(reader);
-    LOGD("Obtained perspective transform is: ", trfMatrix);
+    auto hTransformer = std::make_shared<Transformer>("Please choose the four corners");
+    reader.subscribe(hTransformer);
+    std::thread readerThread = reader.run(inOpts);
+    hTransformer->getBoardCoords();
+
+//    auto hWriterLR = std::make_shared<ThreadedWriter>(outOptsLoRes);
+//    hTransformer->subscribe(hWriterLR);
     // -----------
-    // open transcoder & processor
+    // open transcoder & writer
     // -----------
 
     LOGX;
@@ -269,15 +330,19 @@ namespace
         cv::FileStorage fs(configFile, cv::FileStorage::READ);
         const auto rootNode = fs.root();
         // Read input options
+        for (auto it = rootNode.begin(); it != rootNode.end(); ++it)
+        {
+            LOGD("Node: ", (*it).name());
+        }
         auto it = std::find_if(rootNode.begin(), rootNode.end(),
-                               [](const cv::FileNode& node){return (node.name() == "input");});
+                               [](const cv::FileNode& node){return !node.name().compare("input");});
         if (it == rootNode.end())
         {
             throw std::runtime_error("Input options not found in " + configFile);
         }
         const auto inputsNode = *it;
         it = std::find_if(inputsNode.begin(), inputsNode.end(),
-                          [](const cv::FileNode& node){return (node.name() == INPUT_DRIVER);});
+                          [](const cv::FileNode& node){return !node.name().compare(INPUT_DRIVER);});
         if (it == inputsNode.end())
         {
             throw std::runtime_error("Unable to find input options for " + INPUT_DRIVER + " in " + configFile);
@@ -286,21 +351,21 @@ namespace
 
         // Read output options
         it = std::find_if(rootNode.begin(), rootNode.end(),
-                          [](const cv::FileNode& node){return (node.name() == "output");});
+                          [](const cv::FileNode& node){return !node.name().compare("output");});
         if (it == rootNode.end())
         {
             throw std::runtime_error("Output options not found in " + configFile);
         }
         const auto outputsNode = *it;
         it = std::find_if(outputsNode.begin(), outputsNode.end(),
-                          [](const cv::FileNode& node){return (node.name() == "lores");});
+                          [](const cv::FileNode& node){return !node.name().compare("lores");});
         if (it == outputsNode.end())
         {
             throw std::runtime_error("Unable to find lo-res output options for in " + configFile);
         }
         readFileNodeIntoOpts(*it, outOptsLR);
         it = std::find_if(outputsNode.begin(), outputsNode.end(),
-                          [](const cv::FileNode& node){return (node.name() == "hires");});
+                          [](const cv::FileNode& node){return !node.name().compare("hires");});
         if (it == outputsNode.end())
         {
             throw std::runtime_error("Unable to find hi-res output options for in " + configFile);
@@ -365,6 +430,10 @@ namespace
             }
             //remove invalid observers
             this->unsubscribe();
+            if (this->observers_.empty())
+            {
+                break;  //stop reading if there are no observers. If a frame is read but there is noone to see it, is it still read?
+            }
         }
     }
 
@@ -397,42 +466,42 @@ namespace
     }
 
     // ---------------------------
-    // Display Window Definitions
+    // Transformer Definitions
     // ---------------------------
 
-    /// Structure that creates the window to display the frames and captures the four corners of the
-    /// board or other planar object to rectify
-    class DisplayWindow: public FrameObserver
-    {
-    private:
-        std::vector<cv::Point2f> corners_;                              ///< corners to use for perspective transformation
-        const std::string name_;                                        ///< name of window
-        int draggedPt_;                                                 ///< currently dragged point. -1 if none
-        std::mutex  mutex_;                                             ///< mutex for updating image
-        std::unique_ptr<avtools::ImageConversionContext> hConvCtx_;     ///< conversion context if input is not in BGR24 format
-        avtools::Frame  convFrame_;                                     ///< frame to display
-        cv::Mat img_;                                                   ///< wrapper around frame to display
-        cv::Mat trfMatrix_;                                             ///< current transformation matrix
+//    /// Structure that creates the window to display the frames and captures the four corners of the
+//    /// board or other planar object to rectify
+//    class DisplayWindow: public FrameObserver
+//    {
+//    private:
+//        std::vector<cv::Point2f> corners_;                              ///< corners to use for perspective transformation
+//        const std::string name_;                                        ///< name of window
+//        int draggedPt_;                                                 ///< currently dragged point. -1 if none
+//        std::mutex  mutex_;                                             ///< mutex for updating image
+//        std::unique_ptr<avtools::ImageConversionContext> hConvCtx_;     ///< conversion context if input is not in BGR24 format
+//        avtools::Frame  convFrame_;                                     ///< frame to display
+//        cv::Mat img_;                                                   ///< wrapper around frame to display
+//        cv::Mat trfMatrix_;                                             ///< current transformation matrix
+//
+//        /// @override cv::MouseCallback
+//        static void MouseCallback(int event, int x, int y, int flags, void* userdata);
+//    public:
+//        /// Ctor
+//        /// @param[in] winName name of the window
+//        DisplayWindow(const std::string& winName);
+//
+//        /// Dtor
+//        ~DisplayWindow();
+//
+//        /// @param[in] new frame data
+//        void notify(const avtools::Frame& frame) override;
+//        /// Displays the latest acquired frame
+//        void display();
+//        /// Returns the current perspective transformation matrix
+//        const cv::Mat& getPerspectiveTransformationMatrix() const;
+//    };  //<anon>::DisplayWindow
 
-        /// @override cv::MouseCallback
-        static void MouseCallback(int event, int x, int y, int flags, void* userdata);
-    public:
-        /// Ctor
-        /// @param[in] winName name of the window
-        DisplayWindow(const std::string& winName);
-
-        /// Dtor
-        ~DisplayWindow();
-
-        /// @param[in] new frame data
-        void notify(const avtools::Frame& frame) override;
-        /// Displays the latest acquired frame
-        void display();
-        /// Returns the current perspective transformation matrix
-        const cv::Mat& getPerspectiveTransformationMatrix() const;
-    };  //<anon>::DisplayWindow
-
-    DisplayWindow::DisplayWindow(const std::string& winName):
+    Transformer::Transformer(const std::string& winName):
     corners_(),
     name_(winName),
     draggedPt_(-1),
@@ -442,17 +511,17 @@ namespace
     img_()
     {
         cv::namedWindow(name_);
-        cv::setMouseCallback(name_, DisplayWindow::MouseCallback, this );
+        cv::setMouseCallback(name_, Transformer::MouseCallback, this );
     }
 
-    DisplayWindow::~DisplayWindow()
+    Transformer::~Transformer()
     {
         LOGD("Removing display window");
     }
     /// @override cv::MouseCallback
-    void DisplayWindow::MouseCallback(int event, int x, int y, int flags, void *userdata)
+    void Transformer::MouseCallback(int event, int x, int y, int flags, void *userdata)
     {
-        DisplayWindow* pWin = static_cast<DisplayWindow*>(userdata);
+        Transformer* pWin = static_cast<Transformer*>(userdata);
         std::unique_lock<std::mutex> lock(pWin->mutex_, std::try_to_lock);
         if (lock)
         {
@@ -500,41 +569,7 @@ namespace
         }
     }
 
-    void DisplayWindow::display()
-    {
-        static const cv::Scalar FIXED_COLOR = cv::Scalar(0,0,255), DRAGGED_COLOR = cv::Scalar(255, 0, 0);
-        std::lock_guard<std::mutex> lock(mutex_);
-        if (img_.elemSize() == 0)
-        {
-            return;
-        }
-        if (corners_.size() == 4)
-        {
-            const std::vector<cv::Point2f> TGT_CORNERS = {cv::Point2f(0,0), cv::Point2f(convFrame_->width, 0), cv::Point2f(convFrame_->width, convFrame_->height), cv::Point2f(0, convFrame_->height)};
-            trfMatrix_ = cv::getPerspectiveTransform(corners_, TGT_CORNERS);
-            cv::Mat warpedFrame_(convFrame_->height, convFrame_->width, CV_8UC3);
-            cv::warpPerspective(img_, warpedFrame_, trfMatrix_, img_.size());
-            cv::imshow(name_+"_warped", warpedFrame_);
-        }
-
-        cv::Mat imgToDisplay = img_.clone();
-        for (int i = 0; i < corners_.size(); ++i)
-        {
-            auto color = (draggedPt_ == i ? DRAGGED_COLOR : FIXED_COLOR);
-            cv::drawMarker(imgToDisplay, corners_[i], color, cv::MarkerTypes::MARKER_SQUARE, 5);
-            cv::putText(imgToDisplay, std::to_string(i+1), corners_[i], cv::FONT_HERSHEY_SIMPLEX, 0.5, color);
-        }
-        if (corners_.size() == 4)
-        {
-            for (int i = 0; i < 4; ++i)
-            {
-                cv::line(imgToDisplay, corners_[i], corners_[(i+1) % 4], FIXED_COLOR);
-            }
-        }
-        cv::imshow(name_, imgToDisplay);
-    }
-
-    void DisplayWindow::notify(const avtools::Frame &frame)
+    void Transformer::notify(const avtools::Frame &frame)
     {
         if (convFrame_->width == 0)
         {
@@ -573,21 +608,60 @@ namespace
         }
     }
 
-    const cv::Mat& DisplayWindow::getPerspectiveTransformationMatrix() const
+    void Transformer::getBoardCoords()
     {
-        return trfMatrix_;
-    }
-
-    const cv::Mat getPerspectiveTransform(ThreadedReader& reader)
-    {
-        auto hWin = std::make_shared<DisplayWindow>("Please choose the four corners of the board");
-        reader.subscribe(hWin);
-
-        while (cv::waitKey(5) < 0)
+        static const cv::Scalar FIXED_COLOR = cv::Scalar(0,0,255), DRAGGED_COLOR = cv::Scalar(255, 0, 0);
+        while ( cv::waitKey(5) < 0 )
         {
-            hWin->display();
+            if (convFrame_->width > 0)
+            {
+                std::lock_guard<std::mutex> lock(mutex_);
+                // Display received frame
+                cv::Mat imgToDisplay = img_.clone();
+                for (int i = 0; i < corners_.size(); ++i)
+                {
+                    auto color = (draggedPt_ == i ? DRAGGED_COLOR : FIXED_COLOR);
+                    cv::drawMarker(imgToDisplay, corners_[i], color, cv::MarkerTypes::MARKER_SQUARE, 5);
+                    cv::putText(imgToDisplay, std::to_string(i+1), corners_[i], cv::FONT_HERSHEY_SIMPLEX, 0.5, color);
+                }
+                if (corners_.size() == 4)
+                {
+                    for (int i = 0; i < 4; ++i)
+                    {
+                        cv::line(imgToDisplay, corners_[i], corners_[(i+1) % 4], FIXED_COLOR);
+                    }
+                }
+                cv::imshow(name_, imgToDisplay);
+                // Display perspective-corrected frame
+                if (corners_.size() == 4)
+                {
+                    const std::vector<cv::Point2f> TGT_CORNERS = {cv::Point2f(0,0), cv::Point2f(convFrame_->width, 0), cv::Point2f(convFrame_->width, convFrame_->height), cv::Point2f(0, convFrame_->height)};
+                    trfMatrix_ = cv::getPerspectiveTransform(corners_, TGT_CORNERS);
+                    cv::Mat warpedFrame_(convFrame_->height, convFrame_->width, CV_8UC3);
+                    cv::warpPerspective(img_, warpedFrame_, trfMatrix_, img_.size());
+                    cv::imshow(name_+"_warped", warpedFrame_);
+                }
+            }
         }
-        reader.unsubscribe(hWin);
-        return hWin->getPerspectiveTransformationMatrix();
+        if (corners_.size() == 4)
+        {
+            LOGD("Current perspective transform is :", trfMatrix_);
+        }
+        else
+        {
+            throw std::runtime_error("Perspective transform requires 4 points.");
+        }
     }
+//    const cv::Mat getPerspectiveTransform(ThreadedReader& reader)
+//    {
+//        auto hWin = std::make_shared<DisplayWindow>("Please choose the four corners of the board");
+//        reader.subscribe(hWin);
+//
+//        while (cv::waitKey(5) < 0)
+//        {
+//            hWin->display();
+//        }
+//        reader.unsubscribe(hWin);
+//        return hWin->getPerspectiveTransformationMatrix();
+//    }
 }   //::<anon>

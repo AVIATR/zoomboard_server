@@ -11,6 +11,8 @@
 #include <algorithm>
 #include <vector>
 #include <mutex>
+#include <shared_mutex>
+#include <condition_variable>
 #include <thread>
 #include "version.h"
 #include "MediaReader.hpp"
@@ -78,56 +80,139 @@ namespace
 //    /// @throw std::runtime_error if the frame size info could not be extracted
 //    cv::Size getDims(const std::string& sizeStr);
 
-    /// @class virtual observer class
-    struct FrameObserver: public std::enable_shared_from_this<FrameObserver>
-    {
-        /// @param[in] new frame to provide when one is available
-        virtual void notify(const avtools::Frame&) = 0;
-        virtual ~FrameObserver() = default;
-    };
-
-    /// @class Threaded reader that uses a threaded observer pattern.
+    /// @class Thread-safe frame wrapper
     /// See https://stackoverflow.com/questions/39516416/using-weak-ptr-to-implement-the-observer-pattern
-    class ThreadedReader
+    /// This frame employes a single writer/multiple reader paradigm
+    /// Only one thread can write at a time, using update()
+    /// Multiple threads can read at the same time, accessing the underlying frame via get()
+    /// Threads subscribe to this frame via subscribe(). When a new frame is available (After an update()),
+    /// all subscribers are called with notify() to give them access to the underlying frame.
+    /// Also see https://en.cppreference.com/w/cpp/thread/shared_mutex for single writer/multiple reader example
+    class ThreadsafeFrame
     {
-    private:
-        std::mutex mutex_;  //mutex used to ensure that observers don't get removed mid-notification
-        std::vector<std::weak_ptr<FrameObserver>> observers_;
-        /// Thread function to use.
-        void read(Options& opts);
     public:
+        /// @class virtual observer class for used with observer-pattern designed threaded writers, etc.
+        struct Observer: public std::enable_shared_from_this<Observer>
+        {
+            /// Function that gets called with a new frame by the observee.
+            /// @param[in] new frame to provide when one is available
+            /// @param[in] condition variable a new thread can use for synchronization
+            virtual void notify(const avtools::Frame&, std::condition_variable_any& cv) = 0;
+            /// Dtor
+            virtual ~Observer() = default;
+        };
         /// Ctor
-        /// @param[in] opts options for the input stream
-        ThreadedReader();
+        ThreadsafeFrame();
         /// Dtor
-        ~ThreadedReader() = default;
-        /// Subscribers an observer to the threaded reader. The observer gets notified about the new
+        ~ThreadsafeFrame();
+        /// Called from the writer thread, this updates the frame
+        /// @param[in] frame new frame that will replace the existing frame
+        void update(avtools::Frame& frame);
+        /// Subscribes an observer to the threaded frame. The observer gets notified about the new
         /// frame when one is available
         /// @param[in] obs new observer to subscribe
-        void subscribe(std::shared_ptr<FrameObserver> obs);
+        void subscribe(std::shared_ptr<Observer> obs);
         /// Removes a previously subscribed observer
-        /// @param[in] obs observer to remove from subcsribers. If nullptr, all defunt observers are unsusbcribed
-        void unsubscribe(std::shared_ptr<FrameObserver> obs=nullptr);
+        /// @param[in] obs observer to remove from subcsribers. If nullptr, all defunct observers are unsusbcribed
+        void unsubscribe(std::shared_ptr<Observer> obs=nullptr);
+        /// @return constant reference to the underlying frame
+        const avtools::Frame& get() const;
+        mutable std::shared_timed_mutex frameMutex_;        ///< Mutex used for single writer/multiple reader access TODO: Update to c++17 and std::shared_mutex
+        std::condition_variable_any cv_;                        ///< Condition variable to let observers know when a new frame has arrived
+    private:
+        avtools::Frame frame_;                              ///< Actual frame
+        std::mutex obsMutex_;                               ///< mutex used to ensure that observers don't get removed mid-notification
+        std::vector<std::weak_ptr<Observer>> observers_;    ///< List of observers
+//        size_t i_;                                          ///< Frame index
+    }; //::<anon>::ThreadsafeFrame
 
-        /// Launches a new reader thread
-        /// @param[in] opts stream options
-        /// @return the new thread
-        std::thread run(Options& opts);
+    /// Function that starts a stream reader that writes to a threaded frame
+    /// @param[in] tFrame threadsafe frame to write to
+    /// @param[in] opts input options
+    /// @return a new thread that reads frames from the input stream and updates the threaded frame
+    std::thread threadedRead(ThreadsafeFrame& tFrame, Options& opts)
+    {
+        return std::thread([&tFrame, &opts](){
+            LOGD("Input options are", opts.streamOptions.as_string());
+            avtools::MediaReader rdr(opts.url, opts.streamOptions, avtools::InputMediaType::CAPTURE_DEVICE);
+            avtools::Frame frame(*rdr.getVideoStream()->codecpar);
+            while (const AVStream* pS = rdr.read(frame))
+            {
+                frame->best_effort_timestamp -= pS->start_time;
+                frame->pts -= pS->start_time;
+                LOGD("Frame read: ", frame.info(1));
+                tFrame.update(frame);
+            }
+        });
+    }
+
+    class ThreadedWriter: public ThreadsafeFrame::Observer
+    {
+    private:
+        avtools::TimeType lastPts_;
+        ThreadedWriter():
+        lastPts_(-1)
+        {
+        }
+    public:
+        static std::shared_ptr<ThreadedWriter> GetWriter(ThreadsafeFrame& frame)
+        {
+            std::shared_ptr<ThreadedWriter> pWriter = std::shared_ptr<ThreadedWriter>(new ThreadedWriter);
+            frame.subscribe(pWriter);
+            return pWriter;
+        }
+        void notify(const avtools::Frame& frame, std::condition_variable_any& cv) override
+        {
+            if (frame->best_effort_timestamp > lastPts_)
+            {
+                lastPts_ = frame->best_effort_timestamp;
+                LOGD("Notified ThreadedWriter in thread ", std::this_thread::get_id(), ", last processed frame has pts: ", lastPts_);
+            }
+        }
+        void threadNotify(const avtools::Frame& frame)
+        {
+            assert(frame->best_effort_timestamp > lastPts_);
+            {
+                lastPts_ = frame->best_effort_timestamp;
+                LOGD("This is ThreadedWriter in thread ", std::this_thread::get_id(), ", last processed frame has pts: ", lastPts_);
+            }
+        }
     };
+    std::thread threadedWrite(ThreadsafeFrame& frame)
+    {
+        return std::thread([&frame](){
+            thread_local avtools::TimeType pts = -1;
+            auto pWriter = ThreadedWriter::GetWriter(frame);
+            while (true)
+            {
+                {
+                    std::shared_lock<std::shared_timed_mutex> lock(frame.frameMutex_);
+                    pts = frame.get()->best_effort_timestamp;
+                    LOGD("This is writer thread ", std::this_thread::get_id(), " received frame with pts: ", pts);
+                    if (frame.get()->best_effort_timestamp > pts)
+                    {
+                        pWriter->threadNotify(frame.get());
+                    }
+                    frame.cv_.wait(lock, [&frame](){return frame.get()->best_effort_timestamp > pts;});
+                    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+                }
+            }
+        });
+    }
 
     /// @class Transformer class that asks the user to choose the corners of the board and undoes the
     /// perspective transform. This can then be used with
     /// cv::warpPerspective to correct the perspective of the video.
     /// also @see https://docs.opencv.org/3.1.0/da/d54/group__imgproc__transform.html
     /// Writer can subscribe to this to be notified when a new perspective-corrected frame is available.
-    class Transformer: public FrameObserver
+    class Transformer: public ThreadsafeFrame::Observer
     {
     private:
         std::vector<cv::Point2f> corners_;                              ///< corners to use for perspective transformation
         const std::string name_;                                        ///< name of window
         int draggedPt_;                                                 ///< currently dragged point. -1 if none
         std::mutex mutex_;                                              ///< mutex used for thread sync
-        std::vector<std::weak_ptr<FrameObserver>> observers_;           ///< list of observers/subscribers
+        std::vector<std::weak_ptr<typename ThreadsafeFrame::Observer>> observers_;           ///< list of observers/subscribers
         std::unique_ptr<avtools::ImageConversionContext> hConvCtx_;     ///< conversion context if input is not in BGR24 format
         avtools::Frame  convFrame_;                                     ///< frame to display
         cv::Mat img_;                                                   ///< wrapper around frame to display
@@ -145,41 +230,41 @@ namespace
         /// Subscribers an observer to the threaded reader. The observer gets notified about the new
         /// frame when one is available
         /// @param[in] obs new observer to subscribe
-        void subscribe(std::shared_ptr<FrameObserver> obs);
+        void subscribe(std::shared_ptr<ThreadsafeFrame::Observer> obs);
         /// Removes a previously subscribed observer
         /// @param[in] obs observer to remove from subcsribers. If nullptr, all defunt observers are unsusbcribed
-        void unsubscribe(std::shared_ptr<FrameObserver> obs=nullptr);
+        void unsubscribe(std::shared_ptr<ThreadsafeFrame::Observer> obs=nullptr);
         /// @param[in] new frame data
-        void notify(const avtools::Frame& frame) override;
+        void notify(const avtools::Frame& frame, std::condition_variable_any& cv) override;
         /// Displays the latest acquired frame
         void display();
         /// Launches a window where the user can choose the coordinates of the board
         void getBoardCoords();
     };  //::<anon>::Transformer
 
-    /// @class Threaded writer.
-    class ThreadedWriter: public FrameObserver
-    {
-    private:
-        std::mutex mutex_;  //mutex used to ensure that observers don't get removed mid-notification
-        std::vector<std::weak_ptr<FrameObserver>> observers_;
-        /// Thread function to use.
-        void read(Options& opts);
-    public:
-        /// Ctor
-        /// @param[in] opts options for the output stream
-        ThreadedWriter(Options& opts);
-        /// Dtor
-        ~ThreadedWriter() = default;
-        /// @param[in] new frame data
-        void notify(const avtools::Frame& frame) override;
-
-        /// Launches a new reader thread
-        /// @param[in] opts stream options
-        /// @return the new thread
-        std::thread run(Options& opts);
-    };
-
+//    /// @class Threaded writer.
+//    class ThreadedWriter: public ThreadsafeFrame::Observer
+//    {
+//    private:
+//        std::mutex mutex_;  //mutex used to ensure that observers don't get removed mid-notification
+//        avtools::MediaWriter writer_;
+//        std::vector<std::weak_ptr<ThreadsafeFrame::Observer>> observers_;
+//        /// Thread function to use.
+//        void read(Options& opts);
+//    public:
+//        /// Ctor
+//        /// @param[in] opts options for the output stream
+//        ThreadedWriter(Options& opts);
+//        /// Dtor
+//        ~ThreadedWriter() = default;
+//        /// @param[in] new frame data
+//        void notify(const avtools::Frame& frame, std::condition_variable& cv) override;
+//
+//        /// Launches a new reader thread
+//        /// @return the new thread
+//        std::thread run();
+//    };
+//
 } //::<anon>
 
 // The command we are trying to implement for one output stream is
@@ -203,34 +288,32 @@ int main(int argc, const char * argv[])
     // -----------
     // Open the media reader
     // -----------
-    ThreadedReader reader;
+//    ThreadedReader reader;
+    ThreadsafeFrame inFrame;
+    std::thread readerThread = threadedRead(inFrame, inOpts);
+    std::thread writerThread1 = threadedWrite(inFrame);
+    std::thread writerThread2 = threadedWrite(inFrame);
+    readerThread.join();
+    writerThread1.join();
+    writerThread2.join();
 
     // -----------
     // Add transformer
     // -----------
-    auto hTransformer = std::make_shared<Transformer>("Please choose the four corners");
-    reader.subscribe(hTransformer);
-    std::thread readerThread = reader.run(inOpts);
-    hTransformer->getBoardCoords();
+//    auto hTransformer = std::make_shared<Transformer>("Please choose the four corners");
+//    reader.subscribe(hTransformer);
+//    std::thread readerThread = reader.run(inOpts);
+//    hTransformer->getBoardCoords();
 
-//    auto hWriterLR = std::make_shared<ThreadedWriter>(outOptsLoRes);
-//    hTransformer->subscribe(hWriterLR);
-    // -----------
-    // open transcoder & writer
-    // -----------
-
-    LOGX;
-    
     // -----------
     // Open the output stream writers - one for lo-res, one for hi-res
     // -----------
-//    std::thread lowResWriterThread = writer.run(outOptsLoRes);
-//    std::thread hiResWriterThread = writer.run(outOptsHiRes);
-    LOGX;
-    
-    // -----------
-    // Start the read/write loop
-    // -----------
+//    auto hWriterLR = std::make_shared<ThreadedWriter>(outOptsLoRes);
+////    auto hWriterHR = std::make_shared<ThreadedWriter>(outOptsHiRes);
+////    hTransformer->subscribe(hWriterLR);
+//    inFrame.subscribe(hWriterLR);
+//    std::thread lowResWriterThread = hWriterLR->run();
+//    std::thread hiResWriterThread = writer.run();
     LOGX;
     
     // -----------
@@ -409,97 +492,65 @@ namespace
     // ---------------------------
     // Threaded Reader Definitions
     // ---------------------------
-    void ThreadedReader::read(Options& opts)
-    {
-        avtools::MediaReader reader(opts.url, opts.streamOptions, avtools::MediaReader::InputType::CAPTURE_DEVICE);
-        avtools::Frame frame(*reader.getVideoStream()->codecpar);
-        LOGD("Opened input stream.");
-        while (const AVStream* pS = reader.read(frame))
-        {
-            LOGD("Input frame info:\n", frame.info(1));
-            {
-                std::lock_guard<std::mutex> lock(this->mutex_);
-                LOGD("There are ", this->observers_.size(), " observers.");
-                for (auto& o: this->observers_)
-                {
-                    if (auto p = o.lock())
-                    {
-                        p->notify(frame);
-                    }
-                }
-            }
-            //remove invalid observers
-            this->unsubscribe();
-            if (this->observers_.empty())
-            {
-                break;  //stop reading if there are no observers. If a frame is read but there is noone to see it, is it still read?
-            }
-        }
-    }
-
-    ThreadedReader::ThreadedReader() = default;
-
-    std::thread ThreadedReader::run(Options& opts)
-    {
-        return std::thread(&ThreadedReader::read, this, std::ref(opts));
-    }
-
-    void ThreadedReader::subscribe(std::shared_ptr<FrameObserver> obs)
-    {
-        std::lock_guard<std::mutex> lock(mutex_);
-        observers_.emplace_back(obs);
-    }
-
-    void ThreadedReader::unsubscribe(std::shared_ptr<FrameObserver> obs/*=nullptr*/)
-    {
-        std::lock_guard<std::mutex> lock(mutex_);
-        observers_.erase(
-                         std::remove_if(
-                                        observers_.begin(),
-                                        observers_.end(),
-                                        [&obs](const std::weak_ptr<FrameObserver>& o)
-                                        {
-                                            return o.expired() || o.lock() == obs;
-                                        }),
-                         observers_.end()
-                         );
-    }
+//    void ThreadedReader::read(Options& opts)
+//    {
+//        avtools::MediaReader reader(opts.url, opts.streamOptions, avtools::MediaReader::InputType::CAPTURE_DEVICE);
+//        avtools::Frame frame(*reader.getVideoStream()->codecpar);
+//        LOGD("Opened input stream.");
+//        while (const AVStream* pS = reader.read(frame))
+//        {
+//            LOGD("Input frame info:\n", frame.info(1));
+//            {
+//                std::lock_guard<std::mutex> lock(this->mutex_);
+//                LOGD("There are ", this->observers_.size(), " observers.");
+//                for (auto& o: this->observers_)
+//                {
+//                    if (auto p = o.lock())
+//                    {
+//                        p->notify(frame);
+//                    }
+//                }
+//            }
+//            //remove invalid observers
+//            this->unsubscribe();
+//            if (this->observers_.empty())
+//            {
+//                break;  //stop reading if there are no observers. If a frame is read but there is noone to see it, is it still read?
+//            }
+//        }
+//    }
+//
+//    ThreadedReader::ThreadedReader() = default;
+//
+//    std::thread ThreadedReader::run(Options& opts)
+//    {
+//        return std::thread(&ThreadedReader::read, this, std::ref(opts));
+//    }
+//
+//    void ThreadedReader::subscribe(std::shared_ptr<FrameObserver> obs)
+//    {
+//        std::lock_guard<std::mutex> lock(mutex_);
+//        observers_.emplace_back(obs);
+//    }
+//
+//    void ThreadedReader::unsubscribe(std::shared_ptr<FrameObserver> obs/*=nullptr*/)
+//    {
+//        std::lock_guard<std::mutex> lock(mutex_);
+//        observers_.erase(
+//                         std::remove_if(
+//                                        observers_.begin(),
+//                                        observers_.end(),
+//                                        [&obs](const std::weak_ptr<FrameObserver>& o)
+//                                        {
+//                                            return o.expired() || o.lock() == obs;
+//                                        }),
+//                         observers_.end()
+//                         );
+//    }
 
     // ---------------------------
     // Transformer Definitions
     // ---------------------------
-
-//    /// Structure that creates the window to display the frames and captures the four corners of the
-//    /// board or other planar object to rectify
-//    class DisplayWindow: public FrameObserver
-//    {
-//    private:
-//        std::vector<cv::Point2f> corners_;                              ///< corners to use for perspective transformation
-//        const std::string name_;                                        ///< name of window
-//        int draggedPt_;                                                 ///< currently dragged point. -1 if none
-//        std::mutex  mutex_;                                             ///< mutex for updating image
-//        std::unique_ptr<avtools::ImageConversionContext> hConvCtx_;     ///< conversion context if input is not in BGR24 format
-//        avtools::Frame  convFrame_;                                     ///< frame to display
-//        cv::Mat img_;                                                   ///< wrapper around frame to display
-//        cv::Mat trfMatrix_;                                             ///< current transformation matrix
-//
-//        /// @override cv::MouseCallback
-//        static void MouseCallback(int event, int x, int y, int flags, void* userdata);
-//    public:
-//        /// Ctor
-//        /// @param[in] winName name of the window
-//        DisplayWindow(const std::string& winName);
-//
-//        /// Dtor
-//        ~DisplayWindow();
-//
-//        /// @param[in] new frame data
-//        void notify(const avtools::Frame& frame) override;
-//        /// Displays the latest acquired frame
-//        void display();
-//        /// Returns the current perspective transformation matrix
-//        const cv::Mat& getPerspectiveTransformationMatrix() const;
-//    };  //<anon>::DisplayWindow
 
     Transformer::Transformer(const std::string& winName):
     corners_(),
@@ -569,7 +620,7 @@ namespace
         }
     }
 
-    void Transformer::notify(const avtools::Frame &frame)
+    void Transformer::notify(const avtools::Frame &frame, std::condition_variable_any& cv)
     {
         if (convFrame_->width == 0)
         {
@@ -652,16 +703,70 @@ namespace
             throw std::runtime_error("Perspective transform requires 4 points.");
         }
     }
-//    const cv::Mat getPerspectiveTransform(ThreadedReader& reader)
-//    {
-//        auto hWin = std::make_shared<DisplayWindow>("Please choose the four corners of the board");
-//        reader.subscribe(hWin);
-//
-//        while (cv::waitKey(5) < 0)
+
+    // ---------------------------
+    // Threadsafe Frame Definitions
+    // ---------------------------
+    ThreadsafeFrame::ThreadsafeFrame():
+    frameMutex_(),
+    cv_(),
+    frame_(),
+    obsMutex_(),
+    observers_()
+    {}
+
+    ThreadsafeFrame::~ThreadsafeFrame() = default;
+    void ThreadsafeFrame::update(avtools::Frame &frame)
+    {
+        std::lock_guard<std::shared_timed_mutex> lock(frameMutex_);
+        frame_ = frame;
+        LOGD("Updated frame ", frame_->best_effort_timestamp);
+        cv_.notify_all();
 //        {
-//            hWin->display();
+//            std::lock_guard<std::mutex> lock2(obsMutex_);
+//            LOGD("There are ", this->observers_.size(), " observers.");
+//            for (auto& o: this->observers_)
+//            {
+//                if (auto p = o.lock())
+//                {
+//                    p->notify(frame, cv_);
+//                }
+//            }
+//            //remove invalid observers
+//            this->unsubscribe();
 //        }
-//        reader.unsubscribe(hWin);
-//        return hWin->getPerspectiveTransformationMatrix();
+    }
+
+    const avtools::Frame& ThreadsafeFrame::get() const
+    {
+        return frame_;
+    }
+
+    void ThreadsafeFrame::subscribe(std::shared_ptr<Observer> obs)
+    {
+        std::lock_guard<std::mutex> lock(obsMutex_);
+        observers_.emplace_back(obs);
+    }
+
+    void ThreadsafeFrame::unsubscribe(std::shared_ptr<Observer> obs/*=nullptr*/)
+    {
+        std::lock_guard<std::mutex> lock(obsMutex_);
+        observers_.erase(
+                         std::remove_if(
+                                        observers_.begin(),
+                                        observers_.end(),
+                                        [&obs](const std::weak_ptr<Observer>& o)
+                                        {
+                                            return o.expired() || o.lock() == obs;
+                                        }),
+                         observers_.end()
+                         );
+    }
+    // ---------------------------
+    // Threaded Writer Definitions
+    // ---------------------------
+//    ThreadedWriter::ThreadedWriter(Options& opts):
+//    {
+//
 //    }
 }   //::<anon>

@@ -236,8 +236,8 @@ namespace avtools
     //
     //==========================================
     
-    MediaReader::MediaReader(const std::string& url, InputType type/*=InputType::FILE*/) try:
-    pImpl_( type == InputType::FILE ? Implementation::OpenFile(url) : Implementation::OpenStream(url) )
+    MediaReader::MediaReader(const std::string& url, InputMediaType type/*=InputType::FILE*/) try:
+    pImpl_( type == InputMediaType::FILE ? Implementation::OpenFile(url) : Implementation::OpenStream(url) )
     {
         assert (pImpl_);
         LOGD(logging::LINE_SINGLE, "Opened video stream:", *getVideoStream(), "\n", logging::LINE_SINGLE);
@@ -247,8 +247,8 @@ namespace avtools
         std::throw_with_nested( MediaError("MediaReader: Unable to open " + url) );
     }
     
-    MediaReader::MediaReader(const std::string& url, Dictionary& dict, InputType type/*=InputType::FILE*/) try:
-    pImpl_( type == InputType::FILE ? Implementation::OpenFile(url, dict) : Implementation::OpenStream(url, dict))
+    MediaReader::MediaReader(const std::string& url, Dictionary& dict, InputMediaType type/*=InputType::FILE*/) try:
+    pImpl_( type == InputMediaType::FILE ? Implementation::OpenFile(url, dict) : Implementation::OpenStream(url, dict))
     {
         assert (pImpl_);
         LOGD(logging::LINE_SINGLE, "Opened video stream:", *getVideoStream(), "\n", logging::LINE_SINGLE);
@@ -291,4 +291,5 @@ namespace avtools
         assert(pImpl_);
         return pImpl_->stream();
     }
+
 }   //::avtools

@@ -411,6 +411,7 @@ namespace avtools
         void convert(const Frame& inFrame, Frame& outFrame);
 
     };  // avtools::ImageConversionContext
+
 } //::avtools
 
 #endif /* LibAVWrappers_hpp */

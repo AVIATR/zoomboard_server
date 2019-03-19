@@ -52,10 +52,11 @@ namespace
         assert(pFrame);
         const std::string filler(indent, '\t');
         std::stringstream ss;
+        ss << filler << "Timestamp:" << pFrame->best_effort_timestamp << std::endl;
         ss << filler << "Picture Format: " << (AVPixelFormat) pFrame->format << std::endl;;
         ss << filler << "Size (w x h): " << pFrame->width << "x" << pFrame->height << std::endl;
         ss << filler << "Aspect Ratio: " << pFrame->sample_aspect_ratio.num << "/" <<pFrame->sample_aspect_ratio.den << std::endl;
-        ss << filler << "Colorspace: " << pFrame->colorspace << std::endl;
+//        ss << filler << "Colorspace: " << pFrame->colorspace << std::endl;
         ss << filler << "Picture Type:" << pFrame->pict_type << std::endl;
         return ss.str();
     };

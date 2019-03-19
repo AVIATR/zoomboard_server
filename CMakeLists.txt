@@ -65,6 +65,13 @@ if (OpenCV_FOUND)
     message(STATUS "OpenCV_INCLUDE_DIRS = ${OpenCV_INCLUDE_DIRS}")
 endif()
 
+#Find Log4cxx
+find_package(LOG4CXX REQUIRED)
+if (LOG4CXX_FOUND)
+    message(STATUS "Log4Cxx Found")
+    message(STATUS "LOG4CXX_LIBRARY_NAME = ${LOG4CXX_LIBRARIES}")
+    message(STATUS "LOG4CXX_INCLUDE_DIRS = ${LOG4CXX_INCLUDE_DIRS}")
+endif()
 ###################################
 # Configure files
 ###################################

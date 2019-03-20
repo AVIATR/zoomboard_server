@@ -7,13 +7,18 @@
 //
 
 #include "MediaWriter.hpp"
-#include "log.hpp"
 #include <string>
+#include "log4cxx/logger.h"
 
 extern "C" {
 #include <libavformat/avformat.h>
 #include <libavcodec/avcodec.h>
 #include <libavdevice/avdevice.h>
+}
+
+namespace
+{
+    log4cxx::LoggerPtr logger(log4cxx::Logger::getLogger("zoombrd.MediaWriter"));
 }
 
 namespace avtools
@@ -230,7 +235,7 @@ namespace avtools
                 }
                 assert(formatCtx_->pb);
             }
-            LOGD("MediaWriter: Opened output file ", url, " in ", pOutFormat->long_name, " format.");
+            LOG4CXX_DEBUG(logger, "MediaWriter: Opened output file " << url << " in " << pOutFormat->long_name << " format.");
             //Add the video stream to the output context
             // Set up encoder context
             ret = avcodec_parameters_to_context(codecCtx_.get(), &codecParam);
@@ -255,7 +260,7 @@ namespace avtools
                 throw MediaError("Unable to open encoder context", ret);
             }
             assert( codecCtx_.isOpen() );
-            LOGD("MediaWriter: Opened encoder for ", codecCtx_.info());
+            LOG4CXX_DEBUG(logger, "MediaWriter: Opened encoder for " << codecCtx_.info());
 
             // Add stream
             AVStream* pStr = avformat_new_stream(formatCtx_.get(), pEncoder);
@@ -270,14 +275,14 @@ namespace avtools
 
             assert( pStr->codecpar && (pStr->codecpar->codec_id == codecId) && (pStr->codecpar->codec_type == AVMEDIA_TYPE_VIDEO) );
             assert( (formatCtx_->nb_streams == 1) && (pStr == formatCtx_->streams[0]) );
-            LOGD("MediaWriter: Opened ", *pStr);
+            LOG4CXX_DEBUG(logger, "MediaWriter: Opened " << *pStr);
             // Write stream header
             ret = avformat_write_header(formatCtx_.get(), nullptr);
             if (ret < 0)
             {
                 throw MediaError("Error occurred when writing output stream header.", ret);
             }
-            LOGD("MediaWriter: Opened output file ", formatCtx_->url);
+            LOG4CXX_DEBUG(logger, "MediaWriter: Opened output file " << formatCtx_->url);
 #ifndef NDEBUG
             formatCtx_.dumpContainerInfo();
 #endif
@@ -289,17 +294,17 @@ namespace avtools
             try
             {
                 write(nullptr);
-                //Write trailer
-                av_write_trailer(formatCtx_.get());
-                // Close file if output is file
-                if ( !(formatCtx_->oformat->flags & AVFMT_NOFILE) )
-                {
-                    avio_close(formatCtx_->pb);
-                }
             }
             catch (std::exception& err)
             {
-                LOGE("Error while flushing packets and closing encoder: ", err.what());
+                LOG4CXX_ERROR(logger, "Error while flushing packets and closing encoder: " << err.what());
+            }
+            //Write trailer
+            av_write_trailer(formatCtx_.get());
+            // Close file if output is file
+            if ( !(formatCtx_->oformat->flags & AVFMT_NOFILE) )
+            {
+                avio_close(formatCtx_->pb);
             }
 #ifndef NDEBUG
             formatCtx_.dumpContainerInfo();

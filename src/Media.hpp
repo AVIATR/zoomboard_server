@@ -51,92 +51,6 @@ namespace avtools
         inline virtual ~MediaError() = default;
     };
 
-
-    
-    /// Handle typedef to handle structures that require freeing up
-    template<class T>
-    using Handle = std::unique_ptr<T, std::function<void(T*)>>;
-    
-//    /// Handle to deal with the lifespan of an AVFrame
-//    typedef Handle<AVFrame> FrameHandle;
-//
-//    /// @return a newly initialized FrameHandle
-//    inline FrameHandle allocateFrame() noexcept
-//    {
-//        return FrameHandle(av_frame_alloc(), [](AVFrame* p) { if (p) av_frame_free(&p);});
-//    }
-//
-//    /// Allocates and output frame for a given set of codec parameters
-//    /// @param[info] codecPar codec codec parameters
-//    /// @return a pointer to a newly alloated frame corresponding to codecPar, nullptr if a frame could not be allocated.
-//    FrameHandle allocateFrame(const AVCodecParameters& codecPar);
-//
-//    /// Allocates a video frame with a given size, format and sample rate.
-//    /// Basically combines av_frame_alloc() and initVideoFrame()
-//    /// @param[in] width how wide the image is in pixels
-//    /// @param[in] height how high the image is in pixels
-//    /// @param[in] format pixel format
-//    /// @param[in] cs color space type
-//    /// @return pointer to a new frame, nullptr if a frame could not be allocated
-//    FrameHandle allocateVideoFrame(int width, int height, AVPixelFormat format, AVColorSpace cs=AVColorSpace::AVCOL_SPC_RGB);
-//
-//    /// Clones a frame. If frame is reference counted, same data is referenced. otherwise, new data buffers are created
-//    /// @param[in] pF ptr to original frame
-//    /// @return handle to cloned frame
-//    inline FrameHandle cloneFrame(const AVFrame* pF) noexcept
-//    {
-//        return FrameHandle(av_frame_clone(pF), [](AVFrame* p) { if (p) av_frame_unref(p);});
-//    }
-
-//    /// Handle to deal with the lifespan of an AVFrame
-//    typedef Handle<AVCodecContext> CodecContextHandle;
-//
-//    /// @return a newly initialized codec context
-//    /// @param[in] pCodec codec to use to initialize default values
-//    inline CodecContextHandle allocateCodecContext(const AVCodec* pCodec=nullptr) noexcept
-//    {
-//        return CodecContextHandle( avcodec_alloc_context3(pCodec), [](AVCodecContext* p) { if (p) avcodec_free_context(&p);});
-//    }
-
-//    /// Handle to deal with the lifespan of an AVFrame
-//    typedef Handle<AVCodecParameters> CodecParametersHandle;
-//
-//    /// @return a newly initialized FrameHandle
-//    inline CodecParametersHandle allocateCodecParameters() noexcept
-//    {
-//        return CodecParametersHandle( avcodec_parameters_alloc(), [](AVCodecParameters* p) { if (p) avcodec_parameters_free(&p);});
-//    }
-//    /// Format context handle
-//    typedef Handle<AVFormatContext> FormatContextHandle;
-    
-//    /// Packet handle
-//    typedef Handle<AVPacket> PacketHandle;
-//
-//    /// allocate a new packet
-//    /// @return handle to newly allocated packet. nullptr on error
-//    inline PacketHandle allocatePacket() noexcept
-//    {
-//        return PacketHandle(av_packet_alloc(), [](AVPacket* p) {av_packet_free(&p); });
-//    }
-//
-//    /// Initiaalize a packet
-//    /// @param[in] h handle to a previous allocated packet
-//    inline void initPacket(PacketHandle& h) noexcept
-//    {
-//        av_init_packet(h.get());
-//        h->data = nullptr;
-//        h->size = 0;
-//    }
-//
-//    /// Unreference a ref-counted packet
-//    /// @param[in] h handle to a previous initialized packet
-//    inline void unrefPacket(PacketHandle& h) noexcept
-//    {
-//        av_packet_unref(h.get());
-//        h->stream_index = -1;
-//    }
-//
-    
     /// Converts a time stamp to a time
     /// @param[in] timeStamp time stamp
     /// @param[in] timebase timebase that the time stamp belongs to
@@ -149,16 +63,6 @@ namespace avtools
     inline TimeType convertTimestamp(TimeType ts, TimeBaseType inTimebase, TimeBaseType outTimebase)
     {
         return av_rescale_q(ts, inTimebase, outTimebase);
-    }
-
-    /// Converts a time stamp to a time
-    /// @param[in] timeStamp time stamp
-    /// @param[in] pStr stream that the time stamp belongs to
-    /// @return time in seconds that timeStamp corresponds to
-    [[deprecated]]
-    inline double calculateTime(TimeType timeStamp, const AVStream* pStr)
-    {
-        return calculateTime(timeStamp, pStr->time_base);
     }
     
     /// Calculates a stream duration (in seconds)
@@ -215,41 +119,6 @@ namespace avtools
     /// @param[in] pStr stream that the frame came from
     /// @param[in] indent number of tabs to indent each line of text
     std::string getFrameInfo(const AVFrame* pFrame, const AVStream* pStr, int indent=0);
-
-    /// Initializes a frame
-    /// @param[in] pFrame frame to be initialized.
-    /// @param[in] codecPar codec parameters containing details of the audio codec
-    /// @return a libav error code if there is an error, 0 otherwise
-//    int initFrame(AVFrame* pFrame, const AVCodecParameters& codecPar);
-
-//    /// Dumps info for.a particular stream to stderr
-//    inline void dumpStreamInfo(AVFormatContext* p, int n, bool isOutput)
-//    {
-//        assert(p);
-//        assert( (n >= 0) && (n < p->nb_streams) );
-//#ifndef NDEBUG
-//        const int level = av_log_get_level();
-//        av_log_set_level(AV_LOG_VERBOSE);
-//        av_dump_format(p, n, p->url, isOutput ? 1 : 0);
-//        av_log_set_level(level);
-//#endif
-//    }
-//
-//    /// Dumps info for.a particular container to stderr
-//    inline void dumpContainerInfo(AVFormatContext* p, bool isOutput)
-//    {
-//        assert(p);
-//#ifndef NDEBUG
-//        const int level = av_log_get_level();
-//        av_log_set_level(AV_LOG_VERBOSE);
-//        int output = isOutput ? 1 : 0;
-//        for (int n = 0; n < p->nb_streams; ++n)
-//        {
-//            av_dump_format(p, n, p->url, output);
-//        }
-//        av_log_set_level(level);
-//#endif
-//    }
 } //::avtools
 
 // These functions are used for printing info re: various media components

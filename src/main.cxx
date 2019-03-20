@@ -18,7 +18,11 @@
 #include "MediaReader.hpp"
 #include "MediaWriter.hpp"
 #include "Media.hpp"
-#include "log.hpp"
+#include "log4cxx/logger.h"
+#include "log4cxx/basicconfigurator.h"
+#include "log4cxx/consoleappender.h"
+#include <log4cxx/patternlayout.h>
+//#include "log4cxx/asyncappender.h"
 //#include "opencv2/core/core.hpp"
 //#include "opencv2/imgproc/imgproc.hpp"
 //#include "opencv2/objdetect/objdetect.hpp"
@@ -45,6 +49,9 @@ namespace
 #else
 #error "Unknown operating system"
 #endif
+
+    // Initialize logger
+    log4cxx::LoggerPtr logger(log4cxx::Logger::getLogger("zoombrd"));
 
     /// @class A structure containing the pertinent ffmpeg options
     /// See https://www.ffmpeg.org/ffmpeg-devices.html for the list of codec & stream options
@@ -133,14 +140,16 @@ namespace
     std::thread threadedRead(ThreadsafeFrame& tFrame, Options& opts)
     {
         return std::thread([&tFrame, &opts](){
-            LOGD("Input options are", opts.streamOptions.as_string());
+            log4cxx::MDC::put("threadname", "reader");
+            LOG4CXX_DEBUG(logger, "Input options are" << opts.streamOptions.as_string());
             avtools::MediaReader rdr(opts.url, opts.streamOptions, avtools::InputMediaType::CAPTURE_DEVICE);
             avtools::Frame frame(*rdr.getVideoStream()->codecpar);
             while (const AVStream* pS = rdr.read(frame))
             {
                 frame->best_effort_timestamp -= pS->start_time;
                 frame->pts -= pS->start_time;
-                LOGD("Frame read: ", frame.info(1));
+                LOG4CXX_DEBUG(logger, "Frame read: \n-" << frame.info(1));
+//                std::cerr << "Frame read:" << frame.info(1) << std::endl;
                 tFrame.update(frame);
             }
         });
@@ -166,7 +175,7 @@ namespace
             if (frame->best_effort_timestamp > lastPts_)
             {
                 lastPts_ = frame->best_effort_timestamp;
-                LOGD("Notified ThreadedWriter in thread ", std::this_thread::get_id(), ", last processed frame has pts: ", lastPts_);
+                LOG4CXX_DEBUG(logger, "Notified ThreadedWriter in thread " << std::this_thread::get_id() << ", last processed frame has pts: " << lastPts_);
             }
         }
         void threadNotify(const avtools::Frame& frame)
@@ -174,13 +183,14 @@ namespace
             assert(frame->best_effort_timestamp > lastPts_);
             {
                 lastPts_ = frame->best_effort_timestamp;
-                LOGD("This is ThreadedWriter in thread ", std::this_thread::get_id(), ", last processed frame has pts: ", lastPts_);
+                LOG4CXX_DEBUG(logger, "This is ThreadedWriter in thread " << std::this_thread::get_id() << ", last processed frame has pts: " << lastPts_);
             }
         }
     };
     std::thread threadedWrite(ThreadsafeFrame& frame)
     {
         return std::thread([&frame](){
+            log4cxx::MDC::put("threadname", "writer");
             thread_local avtools::TimeType pts = -1;
             auto pWriter = ThreadedWriter::GetWriter(frame);
             while (true)
@@ -188,7 +198,7 @@ namespace
                 {
                     std::shared_lock<std::shared_timed_mutex> lock(frame.frameMutex_);
                     pts = frame.get()->best_effort_timestamp;
-                    LOGD("This is writer thread ", std::this_thread::get_id(), " received frame with pts: ", pts);
+                    LOG4CXX_DEBUG(logger, "Received frame with pts: " << pts);
                     if (frame.get()->best_effort_timestamp > pts)
                     {
                         pWriter->threadNotify(frame.get());
@@ -274,11 +284,20 @@ namespace
 // For further help, see https://libav.org/avconv.html
 int main(int argc, const char * argv[])
 {
+    // Set up logger. See https://svn.apache.org/repos/asf/logging/site/trunk/docs/log4cxx/index.html for more info
+    log4cxx::MDC::put("threadname", "main");    //add name of thread
+    log4cxx::PatternLayout layout("%d %-5p [%-8X{threadname} %.8t] %c{1} - %m%n");    //see https://logging.apache.org/log4cxx/latest_stable/apidocs/classlog4cxx_1_1_pattern_layout.html for patterns
+    auto consoleAppender = std::make_unique<log4cxx::ConsoleAppender>(log4cxx::LayoutPtr(&layout));
+    log4cxx::BasicConfigurator::configure(log4cxx::AppenderPtr(consoleAppender.get()));
+    // Set log level.
+    log4cxx::Logger::getRootLogger()->setLevel(log4cxx::Level::getInfo());
+    logger->setLevel(log4cxx::Level::getDebug());
+    LOG4CXX_INFO(logger,"Created ConsoleAppender appender");
     // Parse command line arguments & load the config file
     if (argc != 2)
     {
-        LOG("Incorrect number of arguments, must supply a json configuration file as input.");
-        LOG("Usage: ", argv[0], " <config.json>");
+        LOG4CXX_FATAL(logger, "Incorrect number of arguments, must supply a json configuration file as input.");
+        LOG4CXX_FATAL(logger, "Usage: " << argv[0] << " <config.json>");
         return EXIT_FAILURE;
     }
 
@@ -314,18 +333,14 @@ int main(int argc, const char * argv[])
 //    inFrame.subscribe(hWriterLR);
 //    std::thread lowResWriterThread = hWriterLR->run();
 //    std::thread hiResWriterThread = writer.run();
-    LOGX;
-    
+
     // -----------
     // Cleanup
     // -----------
     //    readerThread.join();
     //    writerThread.join();
-    LOGX;
-    LOGD("Exiting successfully...");
+    LOG4CXX_DEBUG(logger, "Exiting successfully...");
     return EXIT_SUCCESS;
-
-
 }
 
 namespace
@@ -391,7 +406,7 @@ namespace
             }
             else
             {
-                LOGW("Unknown options for ", n.name(), " found in config file for ", node.name());
+                LOG4CXX_INFO(logger, "Unknown options for " << n.name() << " found in config file for " << node.name());
             }
         }
         if (!isUrlFound)
@@ -400,11 +415,11 @@ namespace
         }
         if (!isStreamOptsFound) //note that this can be skipped for stream defaults
         {
-            LOGW("Stream options not found in config file for ", node.name());
+            LOG4CXX_INFO(logger, "Stream options not found in config file for " << node.name());
         }
         if (!isCodecOptsFound) //note that this can be skipped for codec defaults
         {
-            LOGW("Codec options not found in config file for ", node.name());
+            LOG4CXX_INFO(logger, "Codec options not found in config file for " << node.name());
         }
     }
 
@@ -415,7 +430,7 @@ namespace
         // Read input options
         for (auto it = rootNode.begin(); it != rootNode.end(); ++it)
         {
-            LOGD("Node: ", (*it).name());
+            LOG4CXX_DEBUG(logger, "Node: " << (*it).name());
         }
         auto it = std::find_if(rootNode.begin(), rootNode.end(),
                                [](const cv::FileNode& node){return !node.name().compare("input");});
@@ -567,7 +582,7 @@ namespace
 
     Transformer::~Transformer()
     {
-        LOGD("Removing display window");
+        LOG4CXX_DEBUG(logger, "Removing display window");
     }
     /// @override cv::MouseCallback
     void Transformer::MouseCallback(int event, int x, int y, int flags, void *userdata)
@@ -614,7 +629,7 @@ namespace
                     }
                     break;
                 default:
-                    LOGD("Received mouse event: ", event);
+                    LOG4CXX_DEBUG(logger, "Received mouse event: " << event);
                     break;
             }
         }
@@ -642,7 +657,7 @@ namespace
         if (lock)
         {
             av_frame_copy_props(convFrame_.get(), frame.get());
-            LOGD("Output frame info:\n", convFrame_.info(1));
+            LOG4CXX_DEBUG(logger, "Output frame info:\n" << convFrame_.info(1));
             if (hConvCtx_)
             {
                 hConvCtx_->convert(frame, convFrame_);
@@ -696,7 +711,7 @@ namespace
         }
         if (corners_.size() == 4)
         {
-            LOGD("Current perspective transform is :", trfMatrix_);
+            LOG4CXX_DEBUG(logger, "Current perspective transform is :" << trfMatrix_);
         }
         else
         {
@@ -718,9 +733,11 @@ namespace
     ThreadsafeFrame::~ThreadsafeFrame() = default;
     void ThreadsafeFrame::update(avtools::Frame &frame)
     {
-        std::lock_guard<std::shared_timed_mutex> lock(frameMutex_);
-        frame_ = frame;
-        LOGD("Updated frame ", frame_->best_effort_timestamp);
+        {
+            std::lock_guard<std::shared_timed_mutex> lock(frameMutex_);
+            frame_ = frame;
+            LOG4CXX_DEBUG(logger, "Updated frame with ts: " << frame_->best_effort_timestamp);
+        }
         cv_.notify_all();
 //        {
 //            std::lock_guard<std::mutex> lock2(obsMutex_);

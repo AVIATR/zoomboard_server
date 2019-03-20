@@ -9,7 +9,7 @@
 #include "MediaReader.hpp"
 #include "Media.hpp"
 #include "LibAVWrappers.hpp"
-#include "log.hpp"
+#include "log4cxx/logger.h"
 #include <memory>
 #include <stdexcept>
 //#include <iostream>
@@ -35,6 +35,8 @@ namespace
 #else
     #error "Unknown operating system"
 #endif
+
+    log4cxx::LoggerPtr logger(log4cxx::Logger::getLogger("zoombrd.MediaReader"));
 
 }
 
@@ -84,7 +86,7 @@ namespace avtools
                 throw MediaError("Could not find stream information", ret);
             }
             const int nStreams = formatCtx_->nb_streams;
-            LOGD("MediaReader: Format context found.\n\tStart time = ", formatCtx_->start_time, "\n\t#streams = ", nStreams);
+            LOG4CXX_DEBUG(logger, "MediaReader: Format context found.\n\tStart time = " << formatCtx_->start_time << "\n\t#streams = " << nStreams);
 
             // Open the first found video stream
             for (int i = 0; i < nStreams; ++i)
@@ -94,7 +96,7 @@ namespace avtools
                 const AVMediaType type = pStream->codecpar->codec_type;
                 if ( type != AVMEDIA_TYPE_VIDEO )
                 {
-                    LOGD("MediaReader: Skipping unprocessed stream ", *pStream);
+                    LOG4CXX_DEBUG(logger, "MediaReader: Skipping unprocessed stream " << *pStream);
                     continue;
                 }
                 // Open codec
@@ -119,7 +121,7 @@ namespace avtools
                 }
                 codexCtx_->time_base = pStream->time_base;
 
-                LOGD("MediaReader: Opened decoder for stream:\n", *pStream);
+                LOG4CXX_DEBUG(logger, "MediaReader: Opened decoder for stream:\n" << *pStream);
                 stream_ = i;
                 break;
             }
@@ -183,7 +185,7 @@ namespace avtools
                 ret = av_read_frame(formatCtx_.get(), pkt_.get()); //read a new packet
                 if (AVERROR_EOF == ret)
                 {
-                    LOGD("Reached end of file. Closing.");
+                    LOG4CXX_DEBUG(logger, "Reached end of file. Closing.");
                     return nullptr;
                 }
                 else if (ret < 0)
@@ -193,7 +195,7 @@ namespace avtools
                 stream = pkt_->stream_index;
                 if ( stream != stream_ )   //no decoder open for this stream. Skip & read more packets
                 {
-                    LOGD("Skipping packet from undecoded stream.");
+                    LOG4CXX_DEBUG(logger, "Skipping packet from undecoded stream.");
                     pkt_.unref();
                     return read(frame);
                 }
@@ -220,7 +222,7 @@ namespace avtools
                     pkt_.unref();
                     return read(frame);
                 case AVERROR(EOF):
-                    LOGD("StreamDecoder: End of file, no more frames to receive.");
+                    LOG4CXX_INFO(logger, "End of file or stream.");
                     return nullptr;
                 case AVERROR(EINVAL):
                     throw MediaError("Codec not opened, or it is an encoder");
@@ -240,7 +242,7 @@ namespace avtools
     pImpl_( type == InputMediaType::FILE ? Implementation::OpenFile(url) : Implementation::OpenStream(url) )
     {
         assert (pImpl_);
-        LOGD(logging::LINE_SINGLE, "Opened video stream:", *getVideoStream(), "\n", logging::LINE_SINGLE);
+        LOG4CXX_DEBUG(logger, "Opened video stream:" << *getVideoStream());
     }
     catch (std::exception& err)
     {
@@ -251,13 +253,8 @@ namespace avtools
     pImpl_( type == InputMediaType::FILE ? Implementation::OpenFile(url, dict) : Implementation::OpenStream(url, dict))
     {
         assert (pImpl_);
-        LOGD(logging::LINE_SINGLE, "Opened video stream:", *getVideoStream(), "\n", logging::LINE_SINGLE);
-#ifndef NDEBUG
-        {
-            LOGD("Unused options while opening MediaReader:\n", dict.as_string());
-        }
-#endif
-
+        LOG4CXX_DEBUG(logger, "Opened video stream:" << *getVideoStream());
+        LOG4CXX_DEBUG(logger, "Unused options while opening MediaReader:\n" << dict.as_string());
     }
     catch (std::exception& err)
     {
@@ -274,7 +271,7 @@ namespace avtools
             const AVStream* pStr = pImpl_->read(frame);
             if (!pStr) //eof
             {
-                LOGD("End of stream reached. closing MediaReader.");
+                LOG4CXX_DEBUG(logger, "End of stream reached. closing MediaReader.");
                 pImpl_.reset(nullptr);
             }
             return pStr;

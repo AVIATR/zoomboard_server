@@ -7,7 +7,7 @@
 
 #include "LibAVWrappers.hpp"
 #include "Media.hpp"
-#include "log.hpp"
+#include "log4cxx/logger.h"
 #include <sstream>
 extern "C" {
 #include <libavutil/frame.h>
@@ -22,6 +22,7 @@ extern "C" {
 namespace
 {
     using avtools::MediaError;
+    log4cxx::LoggerPtr logger(log4cxx::Logger::getLogger("zoombrd.LibAVWrappers"));
 //    static const int ALIGNMENT = 32;
 
     void initVideoFrame(AVFrame* pFrame, int width, int height, AVPixelFormat format, AVColorSpace cs)
@@ -39,7 +40,7 @@ namespace
         {
             throw MediaError("Error allocating data buffers for video frame", ret);
         }
-        LOGD("Allocated frame data at ", static_cast<void*>(pFrame->data), " with linesize = ", pFrame->linesize[0]);
+        LOG4CXX_DEBUG(logger, "Allocated frame data at " << static_cast<void*>(pFrame->data) << " with linesize = " << pFrame->linesize[0]);
     }
     
     

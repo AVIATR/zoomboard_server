@@ -21,8 +21,8 @@
 #include "log4cxx/logger.h"
 #include "log4cxx/basicconfigurator.h"
 #include "log4cxx/consoleappender.h"
+//#include <log4cxx/fileappender.h>
 #include <log4cxx/patternlayout.h>
-//#include "log4cxx/asyncappender.h"
 //#include "opencv2/core/core.hpp"
 //#include "opencv2/imgproc/imgproc.hpp"
 //#include "opencv2/objdetect/objdetect.hpp"
@@ -95,43 +95,24 @@ namespace
     /// Threads subscribe to this frame via subscribe(). When a new frame is available (After an update()),
     /// all subscribers are called with notify() to give them access to the underlying frame.
     /// Also see https://en.cppreference.com/w/cpp/thread/shared_mutex for single writer/multiple reader example
-    class ThreadsafeFrame
+    struct ThreadsafeFrame
     {
-    public:
-        /// @class virtual observer class for used with observer-pattern designed threaded writers, etc.
-        struct Observer: public std::enable_shared_from_this<Observer>
-        {
-            /// Function that gets called with a new frame by the observee.
-            /// @param[in] new frame to provide when one is available
-            /// @param[in] condition variable a new thread can use for synchronization
-            virtual void notify(const avtools::Frame&, std::condition_variable_any& cv) = 0;
-            /// Dtor
-            virtual ~Observer() = default;
-        };
-        /// Ctor
+        avtools::Frame frame;                   ///Wrapped avtools::Frame
+        mutable std::shared_timed_mutex mutex;  ///< Mutex used for single writer/multiple reader access TODO: Update to c++17 and std::shared_mutex
+        std::condition_variable_any cv;         ///< Condition variable to let observers know when a new frame has arrived
         ThreadsafeFrame();
-        /// Dtor
         ~ThreadsafeFrame();
-        /// Called from the writer thread, this updates the frame
+        /// Called from the writer threa to update the frame
         /// @param[in] frame new frame that will replace the existing frame
         void update(avtools::Frame& frame);
-        /// Subscribes an observer to the threaded frame. The observer gets notified about the new
-        /// frame when one is available
-        /// @param[in] obs new observer to subscribe
-        void subscribe(std::shared_ptr<Observer> obs);
-        /// Removes a previously subscribed observer
-        /// @param[in] obs observer to remove from subcsribers. If nullptr, all defunct observers are unsusbcribed
-        void unsubscribe(std::shared_ptr<Observer> obs=nullptr);
-        /// @return constant reference to the underlying frame
-        const avtools::Frame& get() const;
-        mutable std::shared_timed_mutex frameMutex_;        ///< Mutex used for single writer/multiple reader access TODO: Update to c++17 and std::shared_mutex
-        std::condition_variable_any cv_;                        ///< Condition variable to let observers know when a new frame has arrived
-    private:
-        avtools::Frame frame_;                              ///< Actual frame
-        std::mutex obsMutex_;                               ///< mutex used to ensure that observers don't get removed mid-notification
-        std::vector<std::weak_ptr<Observer>> observers_;    ///< List of observers
-//        size_t i_;                                          ///< Frame index
+        ///@return a chainable ptr to the AVFrame
+        inline AVFrame* operator->() {return frame.get();}
+        ///@return a chainable ptr to the AVFrame
+        inline const AVFrame* operator->() const {return frame.get();}
+        /// @return true if the underlying ptr is non-null
+        explicit inline operator bool() const {return (bool) frame; }
     }; //::<anon>::ThreadsafeFrame
+
 
     /// Function that starts a stream reader that writes to a threaded frame
     /// @param[in] tFrame threadsafe frame to write to
@@ -149,62 +130,27 @@ namespace
                 frame->best_effort_timestamp -= pS->start_time;
                 frame->pts -= pS->start_time;
                 LOG4CXX_DEBUG(logger, "Frame read: \n-" << frame.info(1));
-//                std::cerr << "Frame read:" << frame.info(1) << std::endl;
                 tFrame.update(frame);
             }
         });
     }
 
-    class ThreadedWriter: public ThreadsafeFrame::Observer
-    {
-    private:
-        avtools::TimeType lastPts_;
-        ThreadedWriter():
-        lastPts_(-1)
-        {
-        }
-    public:
-        static std::shared_ptr<ThreadedWriter> GetWriter(ThreadsafeFrame& frame)
-        {
-            std::shared_ptr<ThreadedWriter> pWriter = std::shared_ptr<ThreadedWriter>(new ThreadedWriter);
-            frame.subscribe(pWriter);
-            return pWriter;
-        }
-        void notify(const avtools::Frame& frame, std::condition_variable_any& cv) override
-        {
-            if (frame->best_effort_timestamp > lastPts_)
-            {
-                lastPts_ = frame->best_effort_timestamp;
-                LOG4CXX_DEBUG(logger, "Notified ThreadedWriter in thread " << std::this_thread::get_id() << ", last processed frame has pts: " << lastPts_);
-            }
-        }
-        void threadNotify(const avtools::Frame& frame)
-        {
-            assert(frame->best_effort_timestamp > lastPts_);
-            {
-                lastPts_ = frame->best_effort_timestamp;
-                LOG4CXX_DEBUG(logger, "This is ThreadedWriter in thread " << std::this_thread::get_id() << ", last processed frame has pts: " << lastPts_);
-            }
-        }
-    };
     std::thread threadedWrite(ThreadsafeFrame& frame)
     {
         return std::thread([&frame](){
             log4cxx::MDC::put("threadname", "writer");
             thread_local avtools::TimeType pts = -1;
-            auto pWriter = ThreadedWriter::GetWriter(frame);
-            while (true)
+            while (frame)
             {
                 {
-                    std::shared_lock<std::shared_timed_mutex> lock(frame.frameMutex_);
-                    pts = frame.get()->best_effort_timestamp;
-                    LOG4CXX_DEBUG(logger, "Received frame with pts: " << pts);
-                    if (frame.get()->best_effort_timestamp > pts)
+                    std::shared_lock<std::shared_timed_mutex> lock(frame.mutex);
+                    LOG4CXX_DEBUG(logger, "Received frame with pts: " << frame->best_effort_timestamp);
+                    if (frame->best_effort_timestamp > pts)
                     {
-                        pWriter->threadNotify(frame.get());
+                        pts = frame->best_effort_timestamp;
                     }
-                    frame.cv_.wait(lock, [&frame](){return frame.get()->best_effort_timestamp > pts;});
-                    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+                    frame.cv.wait(lock, [&frame](){return frame->best_effort_timestamp > pts;});
+                    std::this_thread::sleep_for(std::chrono::milliseconds(100));    //to simulate long write process
                 }
             }
         });
@@ -215,14 +161,13 @@ namespace
     /// cv::warpPerspective to correct the perspective of the video.
     /// also @see https://docs.opencv.org/3.1.0/da/d54/group__imgproc__transform.html
     /// Writer can subscribe to this to be notified when a new perspective-corrected frame is available.
-    class Transformer: public ThreadsafeFrame::Observer
+    class Transformer
     {
     private:
         std::vector<cv::Point2f> corners_;                              ///< corners to use for perspective transformation
         const std::string name_;                                        ///< name of window
         int draggedPt_;                                                 ///< currently dragged point. -1 if none
         std::mutex mutex_;                                              ///< mutex used for thread sync
-        std::vector<std::weak_ptr<typename ThreadsafeFrame::Observer>> observers_;           ///< list of observers/subscribers
         std::unique_ptr<avtools::ImageConversionContext> hConvCtx_;     ///< conversion context if input is not in BGR24 format
         avtools::Frame  convFrame_;                                     ///< frame to display
         cv::Mat img_;                                                   ///< wrapper around frame to display
@@ -237,15 +182,6 @@ namespace
         Transformer(const std::string& name);
         /// Dtor
         ~Transformer();
-        /// Subscribers an observer to the threaded reader. The observer gets notified about the new
-        /// frame when one is available
-        /// @param[in] obs new observer to subscribe
-        void subscribe(std::shared_ptr<ThreadsafeFrame::Observer> obs);
-        /// Removes a previously subscribed observer
-        /// @param[in] obs observer to remove from subcsribers. If nullptr, all defunt observers are unsusbcribed
-        void unsubscribe(std::shared_ptr<ThreadsafeFrame::Observer> obs=nullptr);
-        /// @param[in] new frame data
-        void notify(const avtools::Frame& frame, std::condition_variable_any& cv) override;
         /// Displays the latest acquired frame
         void display();
         /// Launches a window where the user can choose the coordinates of the board
@@ -284,11 +220,15 @@ namespace
 // For further help, see https://libav.org/avconv.html
 int main(int argc, const char * argv[])
 {
-    // Set up logger. See https://svn.apache.org/repos/asf/logging/site/trunk/docs/log4cxx/index.html for more info
+    // Set up logger. See https://logging.apache.org/log4cxx/latest_stable/usage.html for more info
     log4cxx::MDC::put("threadname", "main");    //add name of thread
     log4cxx::PatternLayout layout("%d %-5p [%-8X{threadname} %.8t] %c{1} - %m%n");    //see https://logging.apache.org/log4cxx/latest_stable/apidocs/classlog4cxx_1_1_pattern_layout.html for patterns
     auto consoleAppender = std::make_unique<log4cxx::ConsoleAppender>(log4cxx::LayoutPtr(&layout));
     log4cxx::BasicConfigurator::configure(log4cxx::AppenderPtr(consoleAppender.get()));
+    //Also add file appender - see https://stackoverflow.com/questions/13967382/how-to-set-log4cxx-properties-without-property-file
+//    auto fileAppender = std::make_unique<log4cxx::FileAppender>(log4cxx::LayoutPtr(&layout), L"logfile", false);
+//    log4cxx::BasicConfigurator::configure(log4cxx::AppenderPtr(fileAppender.get()));
+
     // Set log level.
     log4cxx::Logger::getRootLogger()->setLevel(log4cxx::Level::getInfo());
     logger->setLevel(log4cxx::Level::getDebug());
@@ -635,44 +575,44 @@ namespace
         }
     }
 
-    void Transformer::notify(const avtools::Frame &frame, std::condition_variable_any& cv)
-    {
-        if (convFrame_->width == 0)
-        {
-            AVPixelFormat fmt = (AVPixelFormat) frame->format;
-            if (!sws_isSupportedInput(fmt))
-            {
-                throw MediaError("Unsupported input pixel format " + std::to_string(fmt));
-            }
-
-            if (fmt != AV_PIX_FMT_BGR24)
-            {
-                hConvCtx_ = std::make_unique<avtools::ImageConversionContext>(frame->width, frame->height, fmt,
-                                                                              frame->width, frame->height, AV_PIX_FMT_BGR24);
-            }
-            convFrame_ = avtools::Frame(frame->width, frame->height, AV_PIX_FMT_BGR24);
-            img_ = getImage(convFrame_);
-        }
-        std::unique_lock<std::mutex> lock(mutex_, std::try_to_lock);
-        if (lock)
-        {
-            av_frame_copy_props(convFrame_.get(), frame.get());
-            LOG4CXX_DEBUG(logger, "Output frame info:\n" << convFrame_.info(1));
-            if (hConvCtx_)
-            {
-                hConvCtx_->convert(frame, convFrame_);
-            }
-            else
-            {
-                assert(frame->format == AV_PIX_FMT_BGR24);
-                int ret = av_frame_copy(convFrame_.get(), frame.get());
-                if (ret < 0)
-                {
-                    throw MediaError("Unable to copy frame from reader.");
-                }
-            }
-        }
-    }
+//    void Transformer::notify(const avtools::Frame &frame, std::condition_variable_any& cv)
+//    {
+//        if (convFrame_->width == 0)
+//        {
+//            AVPixelFormat fmt = (AVPixelFormat) frame->format;
+//            if (!sws_isSupportedInput(fmt))
+//            {
+//                throw MediaError("Unsupported input pixel format " + std::to_string(fmt));
+//            }
+//
+//            if (fmt != AV_PIX_FMT_BGR24)
+//            {
+//                hConvCtx_ = std::make_unique<avtools::ImageConversionContext>(frame->width, frame->height, fmt,
+//                                                                              frame->width, frame->height, AV_PIX_FMT_BGR24);
+//            }
+//            convFrame_ = avtools::Frame(frame->width, frame->height, AV_PIX_FMT_BGR24);
+//            img_ = getImage(convFrame_);
+//        }
+//        std::unique_lock<std::mutex> lock(mutex_, std::try_to_lock);
+//        if (lock)
+//        {
+//            av_frame_copy_props(convFrame_.get(), frame.get());
+//            LOG4CXX_DEBUG(logger, "Output frame info:\n" << convFrame_.info(1));
+//            if (hConvCtx_)
+//            {
+//                hConvCtx_->convert(frame, convFrame_);
+//            }
+//            else
+//            {
+//                assert(frame->format == AV_PIX_FMT_BGR24);
+//                int ret = av_frame_copy(convFrame_.get(), frame.get());
+//                if (ret < 0)
+//                {
+//                    throw MediaError("Unable to copy frame from reader.");
+//                }
+//            }
+//        }
+//    }
 
     void Transformer::getBoardCoords()
     {
@@ -723,67 +663,19 @@ namespace
     // Threadsafe Frame Definitions
     // ---------------------------
     ThreadsafeFrame::ThreadsafeFrame():
-    frameMutex_(),
-    cv_(),
-    frame_(),
-    obsMutex_(),
-    observers_()
+    frame(),
+    mutex(),
+    cv()
     {}
 
     ThreadsafeFrame::~ThreadsafeFrame() = default;
-    void ThreadsafeFrame::update(avtools::Frame &frame)
+
+    void ThreadsafeFrame::update(avtools::Frame &_frame)
     {
-        {
-            std::lock_guard<std::shared_timed_mutex> lock(frameMutex_);
-            frame_ = frame;
-            LOG4CXX_DEBUG(logger, "Updated frame with ts: " << frame_->best_effort_timestamp);
-        }
-        cv_.notify_all();
-//        {
-//            std::lock_guard<std::mutex> lock2(obsMutex_);
-//            LOGD("There are ", this->observers_.size(), " observers.");
-//            for (auto& o: this->observers_)
-//            {
-//                if (auto p = o.lock())
-//                {
-//                    p->notify(frame, cv_);
-//                }
-//            }
-//            //remove invalid observers
-//            this->unsubscribe();
-//        }
+        std::lock_guard<std::shared_timed_mutex> lock(mutex);
+        frame = _frame;
+        LOG4CXX_DEBUG(logger, "Updated frame with ts: " << frame->best_effort_timestamp);
+        cv.notify_all();
     }
 
-    const avtools::Frame& ThreadsafeFrame::get() const
-    {
-        return frame_;
-    }
-
-    void ThreadsafeFrame::subscribe(std::shared_ptr<Observer> obs)
-    {
-        std::lock_guard<std::mutex> lock(obsMutex_);
-        observers_.emplace_back(obs);
-    }
-
-    void ThreadsafeFrame::unsubscribe(std::shared_ptr<Observer> obs/*=nullptr*/)
-    {
-        std::lock_guard<std::mutex> lock(obsMutex_);
-        observers_.erase(
-                         std::remove_if(
-                                        observers_.begin(),
-                                        observers_.end(),
-                                        [&obs](const std::weak_ptr<Observer>& o)
-                                        {
-                                            return o.expired() || o.lock() == obs;
-                                        }),
-                         observers_.end()
-                         );
-    }
-    // ---------------------------
-    // Threaded Writer Definitions
-    // ---------------------------
-//    ThreadedWriter::ThreadedWriter(Options& opts):
-//    {
-//
-//    }
 }   //::<anon>

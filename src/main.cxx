@@ -10,24 +10,20 @@
 #include <string>
 #include <algorithm>
 #include <vector>
+#include <thread>
 #include <mutex>
 #include <shared_mutex>
 #include <condition_variable>
-#include <thread>
-#include "version.h"
-#include "MediaReader.hpp"
-#include "MediaWriter.hpp"
-#include "Media.hpp"
-#include "log4cxx/logger.h"
-#include "log4cxx/basicconfigurator.h"
-#include "log4cxx/consoleappender.h"
+#include <sys/stat.h>
+#include <log4cxx/logger.h>
+#include <log4cxx/basicconfigurator.h>
+#include <log4cxx/consoleappender.h>
 //#include <log4cxx/fileappender.h>
 #include <log4cxx/patternlayout.h>
+#include <opencv2/opencv.hpp>
 //#include "opencv2/core/core.hpp"
 //#include "opencv2/imgproc/imgproc.hpp"
-//#include "opencv2/objdetect/objdetect.hpp"
 //#include "opencv2/highgui/highgui.hpp"
-#include <opencv2/opencv.hpp>
 extern "C" {
 #include <libavformat/avformat.h>
 #include <libavcodec/avcodec.h>
@@ -36,6 +32,10 @@ extern "C" {
 #include <libavutil/opt.h>
 #include <libavutil/avutil.h>
 }
+#include "version.h"
+#include "MediaReader.hpp"
+#include "MediaWriter.hpp"
+#include "Media.hpp"
 
 using avtools::MediaError;
 namespace
@@ -73,19 +73,6 @@ namespace
                     Options& outputOptionsLowRes,
                     Options& outputOptionsHiRes
                     );
-
-    /// Wraps a cv::mat around libav frames. Note that the matrix is just wrapped around the
-    /// existing data, so data is not cloned. Make sure that the matrix is done being used before reading new
-    /// data into the frame.
-    /// @param[in] a decoded video frame
-    /// @return a cv::mat wrapper around the frame data
-    cv::Mat getImage(const avtools::Frame& frame);
-
-//    /// Converts a frame size string in WxH format to a size
-//    /// @param[in] sizeStr string containing size info
-//    /// @return a cv::Size containing the width and height parsed from sizeStr
-//    /// @throw std::runtime_error if the frame size info could not be extracted
-//    cv::Size getDims(const std::string& sizeStr);
 
     /// @class Thread-safe frame wrapper
     /// See https://stackoverflow.com/questions/39516416/using-weak-ptr-to-implement-the-observer-pattern
@@ -188,29 +175,6 @@ namespace
         void getBoardCoords();
     };  //::<anon>::Transformer
 
-//    /// @class Threaded writer.
-//    class ThreadedWriter: public ThreadsafeFrame::Observer
-//    {
-//    private:
-//        std::mutex mutex_;  //mutex used to ensure that observers don't get removed mid-notification
-//        avtools::MediaWriter writer_;
-//        std::vector<std::weak_ptr<ThreadsafeFrame::Observer>> observers_;
-//        /// Thread function to use.
-//        void read(Options& opts);
-//    public:
-//        /// Ctor
-//        /// @param[in] opts options for the output stream
-//        ThreadedWriter(Options& opts);
-//        /// Dtor
-//        ~ThreadedWriter() = default;
-//        /// @param[in] new frame data
-//        void notify(const avtools::Frame& frame, std::condition_variable& cv) override;
-//
-//        /// Launches a new reader thread
-//        /// @return the new thread
-//        std::thread run();
-//    };
-//
 } //::<anon>
 
 // The command we are trying to implement for one output stream is
@@ -220,11 +184,12 @@ namespace
 // For further help, see https://libav.org/avconv.html
 int main(int argc, const char * argv[])
 {
-    // Set up logger. See https://logging.apache.org/log4cxx/latest_stable/usage.html for more info
+    // Set up logger. See https://logging.apache.org/log4cxx/latest_stable/usage.html for more info,
+    //see https://logging.apache.org/log4cxx/latest_stable/apidocs/classlog4cxx_1_1_pattern_layout.html for patterns
     log4cxx::MDC::put("threadname", "main");    //add name of thread
-    log4cxx::PatternLayout layout("%d %-5p [%-8X{threadname} %.8t] %c{1} - %m%n");    //see https://logging.apache.org/log4cxx/latest_stable/apidocs/classlog4cxx_1_1_pattern_layout.html for patterns
-    auto consoleAppender = std::make_unique<log4cxx::ConsoleAppender>(log4cxx::LayoutPtr(&layout));
-    log4cxx::BasicConfigurator::configure(log4cxx::AppenderPtr(consoleAppender.get()));
+    log4cxx::LayoutPtr layoutPtr(new log4cxx::PatternLayout("%d %-5p [%-8X{threadname} %.8t] %c{1} - %m%n")); 
+    log4cxx::AppenderPtr consoleAppPtr(new log4cxx::ConsoleAppender(layoutPtr));
+    log4cxx::BasicConfigurator::configure(consoleAppPtr);
     //Also add file appender - see https://stackoverflow.com/questions/13967382/how-to-set-log4cxx-properties-without-property-file
 //    auto fileAppender = std::make_unique<log4cxx::FileAppender>(log4cxx::LayoutPtr(&layout), L"logfile", false);
 //    log4cxx::BasicConfigurator::configure(log4cxx::AppenderPtr(fileAppender.get()));
@@ -233,17 +198,35 @@ int main(int argc, const char * argv[])
     log4cxx::Logger::getRootLogger()->setLevel(log4cxx::Level::getInfo());
     logger->setLevel(log4cxx::Level::getDebug());
     LOG4CXX_INFO(logger,"Created ConsoleAppender appender");
+
+    const std::string USAGE = "Usage: " + std::string(argv[0]) + " <config_file.json>";
     // Parse command line arguments & load the config file
     if (argc != 2)
     {
-        LOG4CXX_FATAL(logger, "Incorrect number of arguments, must supply a json configuration file as input.");
-        LOG4CXX_FATAL(logger, "Usage: " << argv[0] << " <config.json>");
+        LOG4CXX_FATAL(logger, "Incorrect number of arguments." << USAGE);
         return EXIT_FAILURE;
+    }
+    else
+    {
+        //Until we convert to C++17, we need to use stat to check for file. Afterwards, we can use std::filesystem
+        struct stat buffer;
+        if (stat(argv[1], &buffer) != 0)
+        {
+            LOG4CXX_FATAL(logger, "Configuration file " << argv[1] << " does not exist." << USAGE);
+            return EXIT_FAILURE;
+        }
     }
 
     const std::string configFile = argv[1];
     Options inOpts, outOptsLoRes, outOptsHiRes;
-    getOptions(configFile, inOpts, outOptsLoRes, outOptsHiRes);
+    try
+    {
+        getOptions(configFile, inOpts, outOptsLoRes, outOptsHiRes);
+    }
+    catch (std::exception& err)
+    {
+        std::throw_with_nested("Unable to parse command line options" + USAGE);
+    }
     // -----------
     // Open the media reader
     // -----------
@@ -412,11 +395,19 @@ namespace
         fs.release();
     }
 
+    /// Wraps a cv::mat around libav frames. Note that the matrix is just wrapped around the
+    /// existing data, so data is not cloned. Make sure that the matrix is done being used before reading new
+    /// data into the frame.
+    /// @param[in] frame a decoded video frame
+    /// @return a cv::mat wrapper around the frame data
     inline cv::Mat getImage(const avtools::Frame& frame)
     {
         return cv::Mat(frame->height, frame->width, CV_8UC3, frame->data[0], frame->linesize[0]);
     }
-
+//    /// Converts a frame size string in WxH format to a size
+//    /// @param[in] sizeStr string containing size info
+//    /// @return a cv::Size containing the width and height parsed from sizeStr
+//    /// @throw std::runtime_error if the frame size info could not be extracted
 //    cv::Size getDims(const std::string& sizeStr)
 //    {
 //        int sep = 0;
@@ -442,67 +433,6 @@ namespace
 //        return cv::Size( std::stoi(sizeStr.substr(0, sep)), std::stoi(sizeStr.substr(sep+1)) );
 //    }
 //
-
-
-    // ---------------------------
-    // Threaded Reader Definitions
-    // ---------------------------
-//    void ThreadedReader::read(Options& opts)
-//    {
-//        avtools::MediaReader reader(opts.url, opts.streamOptions, avtools::MediaReader::InputType::CAPTURE_DEVICE);
-//        avtools::Frame frame(*reader.getVideoStream()->codecpar);
-//        LOGD("Opened input stream.");
-//        while (const AVStream* pS = reader.read(frame))
-//        {
-//            LOGD("Input frame info:\n", frame.info(1));
-//            {
-//                std::lock_guard<std::mutex> lock(this->mutex_);
-//                LOGD("There are ", this->observers_.size(), " observers.");
-//                for (auto& o: this->observers_)
-//                {
-//                    if (auto p = o.lock())
-//                    {
-//                        p->notify(frame);
-//                    }
-//                }
-//            }
-//            //remove invalid observers
-//            this->unsubscribe();
-//            if (this->observers_.empty())
-//            {
-//                break;  //stop reading if there are no observers. If a frame is read but there is noone to see it, is it still read?
-//            }
-//        }
-//    }
-//
-//    ThreadedReader::ThreadedReader() = default;
-//
-//    std::thread ThreadedReader::run(Options& opts)
-//    {
-//        return std::thread(&ThreadedReader::read, this, std::ref(opts));
-//    }
-//
-//    void ThreadedReader::subscribe(std::shared_ptr<FrameObserver> obs)
-//    {
-//        std::lock_guard<std::mutex> lock(mutex_);
-//        observers_.emplace_back(obs);
-//    }
-//
-//    void ThreadedReader::unsubscribe(std::shared_ptr<FrameObserver> obs/*=nullptr*/)
-//    {
-//        std::lock_guard<std::mutex> lock(mutex_);
-//        observers_.erase(
-//                         std::remove_if(
-//                                        observers_.begin(),
-//                                        observers_.end(),
-//                                        [&obs](const std::weak_ptr<FrameObserver>& o)
-//                                        {
-//                                            return o.expired() || o.lock() == obs;
-//                                        }),
-//                         observers_.end()
-//                         );
-//    }
-
     // ---------------------------
     // Transformer Definitions
     // ---------------------------
@@ -574,45 +504,6 @@ namespace
             }
         }
     }
-
-//    void Transformer::notify(const avtools::Frame &frame, std::condition_variable_any& cv)
-//    {
-//        if (convFrame_->width == 0)
-//        {
-//            AVPixelFormat fmt = (AVPixelFormat) frame->format;
-//            if (!sws_isSupportedInput(fmt))
-//            {
-//                throw MediaError("Unsupported input pixel format " + std::to_string(fmt));
-//            }
-//
-//            if (fmt != AV_PIX_FMT_BGR24)
-//            {
-//                hConvCtx_ = std::make_unique<avtools::ImageConversionContext>(frame->width, frame->height, fmt,
-//                                                                              frame->width, frame->height, AV_PIX_FMT_BGR24);
-//            }
-//            convFrame_ = avtools::Frame(frame->width, frame->height, AV_PIX_FMT_BGR24);
-//            img_ = getImage(convFrame_);
-//        }
-//        std::unique_lock<std::mutex> lock(mutex_, std::try_to_lock);
-//        if (lock)
-//        {
-//            av_frame_copy_props(convFrame_.get(), frame.get());
-//            LOG4CXX_DEBUG(logger, "Output frame info:\n" << convFrame_.info(1));
-//            if (hConvCtx_)
-//            {
-//                hConvCtx_->convert(frame, convFrame_);
-//            }
-//            else
-//            {
-//                assert(frame->format == AV_PIX_FMT_BGR24);
-//                int ret = av_frame_copy(convFrame_.get(), frame.get());
-//                if (ret < 0)
-//                {
-//                    throw MediaError("Unable to copy frame from reader.");
-//                }
-//            }
-//        }
-//    }
 
     void Transformer::getBoardCoords()
     {

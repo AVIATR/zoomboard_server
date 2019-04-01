@@ -95,6 +95,7 @@ namespace avtools
         try
         {
             initVideoFrame(pFrame_, width, height, format, cs);
+            pFrame_->best_effort_timestamp = pFrame_->pts = AV_NOPTS_VALUE;
         }
         catch (std::exception& err)
         {

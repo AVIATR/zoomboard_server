@@ -26,12 +26,23 @@ struct SwsContext;
 
 namespace avtools
 {
+    // Helper functions
+
+    /// Initialized the data buffers for a new video frame. The frame should be allocated previously
+    /// via av_alloc_frame() or similar.
+    /// @param[in] pFrame frame to fill in the metadata and allocate the data buffers for
+    /// @param[in] width frame width in pixels
+    /// @param[in] height frame height in pixels
+    /// @param[in] format frame pixel layout format
+    /// @param[in] cs colorspace
+    void initVideoFrame(AVFrame* pFrame, int width, int height, AVPixelFormat format, AVColorSpace cs=AVColorSpace::AVCOL_SPC_RGB);
+
     class CodecParameters;  //forward declaraion
 
     /// @class Wrapper around AVFrame
     class Frame
     {
-    private:
+    protected:
         AVFrame* pFrame_;                                       ///< ptr to wrapped frame
     public:
         AVMediaType type;                                       ///< type of frame if data buffers are initialized
@@ -66,7 +77,7 @@ namespace avtools
         Frame(const Frame& frame);
         
         /// Dtor
-        ~Frame();
+        virtual ~Frame();
         
         ///@return the raw pointer to the wrapped AVFrame
         inline AVFrame* get() noexcept { return pFrame_;}
@@ -87,7 +98,11 @@ namespace avtools
         /// @param[in] frame source frame.
         /// @return a reference to this frame.
         Frame& operator=(const Frame& frame);
-        
+
+        /// Clone operator.
+        /// @return a new frame that has the same data and metadata as this one
+        Frame clone() const;
+
         /// Provides a brief information string regarding the underlying frame.
         /// @param[in] indent number of indentation tabs in the returned string
         /// @return a string with information about the frame.

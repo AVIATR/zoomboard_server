@@ -53,6 +53,8 @@ namespace
     // Initialize logger
     log4cxx::LoggerPtr logger(log4cxx::Logger::getLogger("zoombrd"));
 
+    static const AVPixelFormat PIX_FMT = AVPixelFormat::AV_PIX_FMT_BGR24;
+
     /// @class A structure containing the pertinent ffmpeg options
     /// See https://www.ffmpeg.org/ffmpeg-devices.html for the list of codec & stream options
     struct Options
@@ -82,98 +84,56 @@ namespace
     /// Threads subscribe to this frame via subscribe(). When a new frame is available (After an update()),
     /// all subscribers are called with notify() to give them access to the underlying frame.
     /// Also see https://en.cppreference.com/w/cpp/thread/shared_mutex for single writer/multiple reader example
-    struct ThreadsafeFrame
+    struct ThreadsafeFrame: public avtools::Frame
     {
-        avtools::Frame frame;                   ///Wrapped avtools::Frame
-        mutable std::shared_timed_mutex mutex;  ///< Mutex used for single writer/multiple reader access TODO: Update to c++17 and std::shared_mutex
-        std::condition_variable_any cv;         ///< Condition variable to let observers know when a new frame has arrived
+        typedef std::shared_lock<std::shared_timed_mutex> read_lock_t;      ///< Read lock type, allows for multi-threaded read
+        typedef std::unique_lock<std::shared_timed_mutex> write_lock_t;     ///< Write lock type, only one thread can write
+
+        mutable std::shared_timed_mutex mutex;                              ///< Mutex used for single writer/multiple reader access TODO: Update to c++17 and std::shared_mutex
+        mutable std::condition_variable_any cv;                             ///< Condition variable to let observers know when a new frame has arrived
+        /// Ctor
+        /// @param[in] width width of the frame
+        /// @param[in] height of the frame
+        /// @param[in] format frame format
+        ThreadsafeFrame(int width, int height, AVPixelFormat format);
+        /// Default ctor
         ThreadsafeFrame();
-        ~ThreadsafeFrame();
+        /// Dtor
+        virtual ~ThreadsafeFrame();
         /// Called from the writer threa to update the frame
         /// @param[in] frame new frame that will replace the existing frame
-        void update(avtools::Frame& frame);
-        ///@return a chainable ptr to the AVFrame
-        inline AVFrame* operator->() {return frame.get();}
-        ///@return a chainable ptr to the AVFrame
-        inline const AVFrame* operator->() const {return frame.get();}
-        /// @return true if the underlying ptr is non-null
-        explicit inline operator bool() const {return (bool) frame; }
+        void update(const avtools::Frame& frame);
+
+        /// @return a read lock, blocks until it is acquired
+        inline read_lock_t getReadLock() const { return read_lock_t(mutex); }
+        /// @return an attempted read lock. The receiver must test to see if the returned lock is acquired
+        inline read_lock_t tryReadLock() const { return read_lock_t(mutex, std::try_to_lock); }
+        /// @return a write lock, blocks until it is acquired
+        inline write_lock_t getWriteLock() { return write_lock_t(mutex); }
+        /// @return an attempted write lock. The receiver must test to see if the returned lock is acquired
+        inline write_lock_t tryWriteLock() { return write_lock_t(mutex, std::try_to_lock); }
     }; //::<anon>::ThreadsafeFrame
 
 
-    /// Function that starts a stream reader that writes to a threaded frame
+    /// Function that starts a stream reader that reads from a stream int to a threaded frame
     /// @param[in] tFrame threadsafe frame to write to
     /// @param[in] opts input options
     /// @return a new thread that reads frames from the input stream and updates the threaded frame
-    std::thread threadedRead(ThreadsafeFrame& tFrame, Options& opts)
-    {
-        return std::thread([&tFrame, &opts](){
-            log4cxx::MDC::put("threadname", "reader");
-            LOG4CXX_DEBUG(logger, "Input options are" << opts.streamOptions.as_string());
-            avtools::MediaReader rdr(opts.url, opts.streamOptions, avtools::InputMediaType::CAPTURE_DEVICE);
-            avtools::Frame frame(*rdr.getVideoStream()->codecpar);
-            while (const AVStream* pS = rdr.read(frame))
-            {
-                frame->best_effort_timestamp -= pS->start_time;
-                frame->pts -= pS->start_time;
-                LOG4CXX_DEBUG(logger, "Frame read: \n-" << frame.info(1));
-                tFrame.update(frame);
-            }
-        });
-    }
+    std::thread threadedRead(ThreadsafeFrame& tFrame, Options& opts);
 
-    std::thread threadedWrite(ThreadsafeFrame& frame)
-    {
-        return std::thread([&frame](){
-            log4cxx::MDC::put("threadname", "writer");
-            thread_local avtools::TimeType pts = -1;
-            while (frame)
-            {
-                {
-                    std::shared_lock<std::shared_timed_mutex> lock(frame.mutex);
-                    LOG4CXX_DEBUG(logger, "Received frame with pts: " << frame->best_effort_timestamp);
-                    if (frame->best_effort_timestamp > pts)
-                    {
-                        pts = frame->best_effort_timestamp;
-                    }
-                    frame.cv.wait(lock, [&frame](){return frame->best_effort_timestamp > pts;});
-                    std::this_thread::sleep_for(std::chrono::milliseconds(100));    //to simulate long write process
-                }
-            }
-        });
-    }
+    /// Function that starts a stream writer that writes to a stream from a threaded frame
+    /// @param[in] tFrame threadsafe frame to read from
+    /// @param[in] opts output options
+    /// @return a new thread that reads frames from the input frame and writes to an output file
+    std::thread threadedWrite(const ThreadsafeFrame& frame, Options& opts);
 
-    /// @class Transformer class that asks the user to choose the corners of the board and undoes the
+    /// Asks the user to choose the corners of the board and undoes the
     /// perspective transform. This can then be used with
     /// cv::warpPerspective to correct the perspective of the video.
     /// also @see https://docs.opencv.org/3.1.0/da/d54/group__imgproc__transform.html
-    /// Writer can subscribe to this to be notified when a new perspective-corrected frame is available.
-    class Transformer
-    {
-    private:
-        std::vector<cv::Point2f> corners_;                              ///< corners to use for perspective transformation
-        const std::string name_;                                        ///< name of window
-        int draggedPt_;                                                 ///< currently dragged point. -1 if none
-        std::mutex mutex_;                                              ///< mutex used for thread sync
-        std::unique_ptr<avtools::ImageConversionContext> hConvCtx_;     ///< conversion context if input is not in BGR24 format
-        avtools::Frame  convFrame_;                                     ///< frame to display
-        cv::Mat img_;                                                   ///< wrapper around frame to display
-        cv::Mat trfMatrix_;                                             ///< current transformation matrix
-
-        /// @override cv::MouseCallback
-        static void MouseCallback(int event, int x, int y, int flags, void* userdata);
-
-    public:
-        /// Ctor
-        /// @param[in] name of window
-        Transformer(const std::string& name);
-        /// Dtor
-        ~Transformer();
-        /// Displays the latest acquired frame
-        void display();
-        /// Launches a window where the user can choose the coordinates of the board
-        void getBoardCoords();
-    };  //::<anon>::Transformer
+    /// @param[in] frame input frames that will be populated by the reader thread
+    /// @return a perspective transformation matrix
+    cv::Mat getPerspectiveTransformationMatrix(const ThreadsafeFrame& frame);
 
 } //::<anon>
 
@@ -228,40 +188,41 @@ int main(int argc, const char * argv[])
         std::throw_with_nested("Unable to parse command line options" + USAGE);
     }
     // -----------
-    // Open the media reader
+    // Start the thread to read frames
     // -----------
-//    ThreadedReader reader;
-    ThreadsafeFrame inFrame;
+    ThreadsafeFrame inFrame, trfFrame;  //inFrame is the frame from the reader, trfFrame is the perspective transformed frame
     std::thread readerThread = threadedRead(inFrame, inOpts);
-    std::thread writerThread1 = threadedWrite(inFrame);
-    std::thread writerThread2 = threadedWrite(inFrame);
-    readerThread.join();
-    writerThread1.join();
-    writerThread2.join();
 
     // -----------
     // Add transformer
     // -----------
-//    auto hTransformer = std::make_shared<Transformer>("Please choose the four corners");
-//    reader.subscribe(hTransformer);
-//    std::thread readerThread = reader.run(inOpts);
-//    hTransformer->getBoardCoords();
-
+    // hold this thread until the reader is open and we have our first frame
+    {
+        auto lock = inFrame.getReadLock();
+        LOG4CXX_DEBUG(logger, "Sleeping main thread until we start receiving frames");
+        inFrame.cv.wait(lock, [&inFrame](){return inFrame->best_effort_timestamp != AV_NOPTS_VALUE;});
+        LOG4CXX_DEBUG(logger, "Woke main thread with frame" << inFrame.info(1));
+        avtools::Frame tmp(inFrame->width, inFrame->height, PIX_FMT);
+        trfFrame.update(tmp);
+        LOG4CXX_DEBUG(logger, "Initialized transformed frame");
+    }
+    LOG4CXX_DEBUG(logger, "Will ask for board coordinates");
+    // Get corners of the board
+//    cv::Mat trfMatrix = getPerspectiveTransformationMatrix(inFrame);
     // -----------
     // Open the output stream writers - one for lo-res, one for hi-res
     // -----------
-//    auto hWriterLR = std::make_shared<ThreadedWriter>(outOptsLoRes);
-////    auto hWriterHR = std::make_shared<ThreadedWriter>(outOptsHiRes);
-////    hTransformer->subscribe(hWriterLR);
-//    inFrame.subscribe(hWriterLR);
-//    std::thread lowResWriterThread = hWriterLR->run();
-//    std::thread hiResWriterThread = writer.run();
+//    std::thread warperThread = threadedWarp(inFrame, trfFrame);
+    std::thread writerThread1 = threadedWrite(trfFrame, outOptsLoRes);
+    std::thread writerThread2 = threadedWrite(trfFrame, outOptsHiRes);
 
     // -----------
     // Cleanup
     // -----------
-    //    readerThread.join();
-    //    writerThread.join();
+    readerThread.join();
+//    warperThread.join();
+    writerThread1.join();
+    writerThread2.join();
     LOG4CXX_DEBUG(logger, "Exiting successfully...");
     return EXIT_SUCCESS;
 }
@@ -437,65 +398,49 @@ namespace
     // Transformer Definitions
     // ---------------------------
 
-    Transformer::Transformer(const std::string& winName):
-    corners_(),
-    name_(winName),
-    draggedPt_(-1),
-    mutex_(),
-    hConvCtx_(nullptr),
-    convFrame_(),
-    img_()
+    /// @class structure that contains coordinates of a board.
+    struct Board
     {
-        cv::namedWindow(name_);
-        cv::setMouseCallback(name_, Transformer::MouseCallback, this );
-    }
+        std::vector<cv::Point2f> corners;   ///< Currently selected coordinates of the corners
+        int draggedPt;                      ///< index of the point currently being dragged. -1 if none
 
-    Transformer::~Transformer()
-    {
-        LOG4CXX_DEBUG(logger, "Removing display window");
-    }
-    /// @override cv::MouseCallback
-    void Transformer::MouseCallback(int event, int x, int y, int flags, void *userdata)
-    {
-        Transformer* pWin = static_cast<Transformer*>(userdata);
-        std::unique_lock<std::mutex> lock(pWin->mutex_, std::try_to_lock);
-        if (lock)
+        /// Mouse callback for the window, replacing cv::MouseCallback
+        static void OnMouse(int event, int x, int y, int flags, void *userdata)
         {
-            auto& corners = pWin->corners_;
+            Board* pC = static_cast<Board*>(userdata);
+            assert(pC->draggedPt < (int) pC->corners.size());
             switch(event)
             {
                 case cv::MouseEventTypes::EVENT_LBUTTONDOWN:
                     //See if we are near any existing markers
-                    assert(pWin->draggedPt_ < 0);
-                    for (int i = 0; i < corners.size(); ++i)
+                    assert(pC->draggedPt < 0);
+                    for (int i = 0; i < pC->corners.size(); ++i)
                     {
-                        const cv::Point& pt = corners[i];
+                        const cv::Point& pt = pC->corners[i];
                         if (cv::abs(x-pt.x) + cv::abs(y - pt.y) < 10)
                         {
-                            pWin->draggedPt_ = i;  //start dragging
+                            pC->draggedPt = i;  //start dragging
                             break;
                         }
                     }
                     break;
                 case cv::MouseEventTypes::EVENT_MOUSEMOVE:
-                    assert(pWin->draggedPt_ < (int) corners.size());
-                    if ((flags & cv::MouseEventFlags::EVENT_FLAG_LBUTTON) && (pWin->draggedPt_ >= 0))
+                    if ((flags & cv::MouseEventFlags::EVENT_FLAG_LBUTTON) && (pC->draggedPt >= 0))
                     {
-                        corners[pWin->draggedPt_].x = x;
-                        corners[pWin->draggedPt_].y = y;
+                        pC->corners[pC->draggedPt].x = x;
+                        pC->corners[pC->draggedPt].y = y;
                     }
                     break;
                 case cv::MouseEventTypes::EVENT_LBUTTONUP:
-                    assert(pWin->draggedPt_ < (int) corners.size());
-                    if (pWin->draggedPt_ >= 0)
+                    if (pC->draggedPt >= 0)
                     {
-                        corners[pWin->draggedPt_].x = x;
-                        corners[pWin->draggedPt_].y = y;
-                        pWin->draggedPt_ = -1; //end dragging
+                        pC->corners[pC->draggedPt].x = x;
+                        pC->corners[pC->draggedPt].y = y;
+                        pC->draggedPt = -1; //end dragging
                     }
-                    else if (corners.size() < 4)
+                    else if (pC->corners.size() < 4)
                     {
-                        corners.emplace_back(x,y);
+                        pC->corners.emplace_back(x,y);
                     }
                     break;
                 default:
@@ -503,70 +448,199 @@ namespace
                     break;
             }
         }
-    }
 
-    void Transformer::getBoardCoords()
+        /// Ctpr
+        /// @param[in] name of the board
+        Board(const std::string& name):
+        draggedPt(-1)
+        {
+            assert(!name.empty());
+            cv::namedWindow(name);
+            cv::setMouseCallback(name, Board::OnMouse, this);
+        }
+    };  //<anon>::Board
+
+    cv::Mat getPerspectiveTransformationMatrix(const ThreadsafeFrame& frame)
     {
         static const cv::Scalar FIXED_COLOR = cv::Scalar(0,0,255), DRAGGED_COLOR = cv::Scalar(255, 0, 0);
-        while ( cv::waitKey(5) < 0 )
+        static const std::string INPUT_WINDOW_NAME = "Input", OUTPUT_WINDOW_NAME = "Warped";
+        Board board(INPUT_WINDOW_NAME);
+        avtools::Frame intermediateFrame, warpedFrame;
+        cv::Mat trfMatrix, inputImg, warpedImg;
+        std::unique_ptr<avtools::ImageConversionContext> hConvCtx;
+        std::vector<cv::Point2f> TGT_CORNERS;
+        //Initialize
         {
-            if (convFrame_->width > 0)
+//            ThreadsafeFrame::read_lock_t lock(frame.mutex);
+            auto lock = frame.getReadLock();
+            assert( (frame->width > 0) && (frame->height > 0) );
+            TGT_CORNERS = {cv::Point2f(0,0), cv::Point2f(frame->width, 0), cv::Point2f(frame->width, frame->height), cv::Point2f(0, frame->height)};
+            if ( frame->format != PIX_FMT )
             {
-                std::lock_guard<std::mutex> lock(mutex_);
-                // Display received frame
-                cv::Mat imgToDisplay = img_.clone();
-                for (int i = 0; i < corners_.size(); ++i)
+                assert (!hConvCtx);
+                // Initialize conversion context
+                hConvCtx = std::make_unique<avtools::ImageConversionContext>(frame->width, frame->height, (AVPixelFormat) frame->format, frame->width, frame->height, PIX_FMT);
+                intermediateFrame = avtools::Frame(frame->width, frame->height, PIX_FMT);
+            }
+//            warpedFrame = avtools::Frame(frame->width, frame->height, PIX_FMT);
+            warpedImg = cv::Mat(frame->height, frame->width, CV_8UC3);
+        }
+        assert(TGT_CORNERS.size() == 4);
+        //Start the loop
+        while ( cv::waitKey(5) < 0 )    //wait for key press
+        {
+            // See if a new input image is available, and copy to intermediate frame if so
+            {
+//                ThreadsafeFrame::read_lock_t lock(frame.mutex, std::try_to_lock);   //non-blocking attempt to lock
+                auto lock = frame.tryReadLock(); //non-blocking attempt to lock
+                if ( lock && (frame->best_effort_timestamp != AV_NOPTS_VALUE) )
                 {
-                    auto color = (draggedPt_ == i ? DRAGGED_COLOR : FIXED_COLOR);
-                    cv::drawMarker(imgToDisplay, corners_[i], color, cv::MarkerTypes::MARKER_SQUARE, 5);
-                    cv::putText(imgToDisplay, std::to_string(i+1), corners_[i], cv::FONT_HERSHEY_SIMPLEX, 0.5, color);
+                    LOG4CXX_DEBUG(logger, "Transformer received frame with pts: " << frame->best_effort_timestamp);
+                    //Convert frame to BGR24 to display if need be
+                    if (hConvCtx)
+                    {
+                        hConvCtx->convert(frame, intermediateFrame);
+                    }
+                    else
+                    {
+                        assert( (intermediateFrame->width == frame->width) && (intermediateFrame->height == frame->height) && (intermediateFrame->format == frame->format) );
+                        intermediateFrame = frame.clone();
+//                        av_frame_copy(intermediateFrame.get(), frame.get());
+                    }
                 }
-                if (corners_.size() == 4)
+            }
+            // Display intermediateFrame and warpedFrame if available
+            inputImg = getImage(intermediateFrame);
+            if (inputImg.total() > 0)
+            {
+                for (int i = 0; i < board.corners.size(); ++i)
+                {
+                    auto color = (board.draggedPt == i ? DRAGGED_COLOR : FIXED_COLOR);
+                    cv::drawMarker(inputImg, board.corners[i], color, cv::MarkerTypes::MARKER_SQUARE, 5);
+                    cv::putText(inputImg, std::to_string(i+1), board.corners[i], cv::FONT_HERSHEY_SIMPLEX, 0.5, color);
+                }
+                if (board.corners.size() == 4)
                 {
                     for (int i = 0; i < 4; ++i)
                     {
-                        cv::line(imgToDisplay, corners_[i], corners_[(i+1) % 4], FIXED_COLOR);
+                        cv::line(inputImg, board.corners[i], board.corners[(i+1) % 4], FIXED_COLOR);
                     }
+                    trfMatrix = cv::getPerspectiveTransform(board.corners, TGT_CORNERS);
+                    cv::warpPerspective(inputImg, warpedImg, trfMatrix, inputImg.size());
+                    cv::imshow(OUTPUT_WINDOW_NAME, warpedImg);
                 }
-                cv::imshow(name_, imgToDisplay);
-                // Display perspective-corrected frame
-                if (corners_.size() == 4)
-                {
-                    const std::vector<cv::Point2f> TGT_CORNERS = {cv::Point2f(0,0), cv::Point2f(convFrame_->width, 0), cv::Point2f(convFrame_->width, convFrame_->height), cv::Point2f(0, convFrame_->height)};
-                    trfMatrix_ = cv::getPerspectiveTransform(corners_, TGT_CORNERS);
-                    cv::Mat warpedFrame_(convFrame_->height, convFrame_->width, CV_8UC3);
-                    cv::warpPerspective(img_, warpedFrame_, trfMatrix_, img_.size());
-                    cv::imshow(name_+"_warped", warpedFrame_);
-                }
+                cv::imshow(INPUT_WINDOW_NAME, inputImg);
             }
+
         }
-        if (corners_.size() == 4)
+        if (board.corners.size() == 4)
         {
-            LOG4CXX_DEBUG(logger, "Current perspective transform is :" << trfMatrix_);
+            assert(trfMatrix.total() > 0);
+            LOG4CXX_DEBUG(logger, "Current perspective transform is :" << trfMatrix);
         }
         else
         {
             throw std::runtime_error("Perspective transform requires 4 points.");
         }
+        return trfMatrix;
     }
 
     // ---------------------------
     // Threadsafe Frame Definitions
     // ---------------------------
     ThreadsafeFrame::ThreadsafeFrame():
-    frame(),
+    Frame(),
     mutex(),
     cv()
-    {}
+    {
+    }
+
+    ThreadsafeFrame::ThreadsafeFrame(int width, int height, AVPixelFormat format):
+    Frame(width, height, format),
+    mutex(),
+    cv()
+    {
+    }
 
     ThreadsafeFrame::~ThreadsafeFrame() = default;
 
-    void ThreadsafeFrame::update(avtools::Frame &_frame)
+    void ThreadsafeFrame::update(const avtools::Frame &frm)
     {
-        std::lock_guard<std::shared_timed_mutex> lock(mutex);
-        frame = _frame;
-        LOG4CXX_DEBUG(logger, "Updated frame with ts: " << frame->best_effort_timestamp);
+        assert(pFrame_ && frm.get());
+        LOG4CXX_DEBUG(logger, "Updating threadsafe frame with " << frm.info(1));
+        {
+            auto lock = getWriteLock();
+            assert(lock.owns_lock());
+            if ( (pFrame_->width != frm->width) || (pFrame_->height != frm->height) || (pFrame_->format != frm->format) || (pFrame_->colorspace != frm->colorspace) )
+            {
+                LOG4CXX_DEBUG(logger, "Updating frame requires reinitialization");
+                av_frame_unref(pFrame_);
+                avtools::initVideoFrame(pFrame_, frm->width, frm->height, (AVPixelFormat) frm->format, frm->colorspace);
+            }
+            assert( (pFrame_->width == frm->width) && (pFrame_->height == frm->height) && (pFrame_->format == frm->format) && (pFrame_->colorspace == frm->colorspace) );
+            assert(frm->data[0] && pFrame_->data[0]);
+            av_frame_copy_props(pFrame_, frm.get());
+            av_frame_copy(pFrame_, frm.get());
+            type = frm.type;
+//            LOG4CXX_DEBUG(logger, "Updated frame info: " << info(1));
+            LOG4CXX_DEBUG(logger, "Updated frame info: ");
+//            LOG4CXX_DEBUG(logger, "\tsize: " << pFrame_->width << "x" << pFrame_->height);
+//            LOG4CXX_DEBUG(logger, "\tdata: " << static_cast<void*>(pFrame_->data[0]));
+        }
         cv.notify_all();
     }
 
+    // -------------------------
+    // Threaded reader & writer functions
+    // -------------------------
+    std::thread threadedRead(ThreadsafeFrame& tFrame, Options& opts)
+    {
+        return std::thread([&tFrame, &opts](){
+            try
+            {
+                log4cxx::MDC::put("threadname", "reader");
+                LOG4CXX_DEBUG(logger, "Input options are:\n" << opts.streamOptions.as_string());
+                avtools::MediaReader rdr(opts.url, opts.streamOptions, avtools::InputMediaType::CAPTURE_DEVICE);
+                avtools::Frame frame(*rdr.getVideoStream()->codecpar);
+                while (const AVStream* pS = rdr.read(frame))
+                {
+                    frame->best_effort_timestamp -= pS->start_time;
+                    frame->pts -= pS->start_time;
+                    LOG4CXX_DEBUG(logger, "Frame read: \n" << frame.info(1));
+                    tFrame.update(frame);
+                    throw std::runtime_error("something");
+                }
+            }
+            catch (std::exception& err)
+            {
+                LOG4CXX_ERROR(logger, err.what() << "\nExiting reader thread.");
+            }
+        });
+    }
+
+    std::thread threadedWrite(const ThreadsafeFrame& frame, Options& opts)
+    {
+        return std::thread([&frame](){
+            log4cxx::MDC::put("threadname", "writer");
+            thread_local avtools::TimeType pts = -1;
+            while (true)
+            {
+                {
+                    std::shared_lock<std::shared_timed_mutex> lock(frame.mutex);
+                    if (!frame)
+                    {
+                        LOG4CXX_DEBUG(logger, "Received null frame, closing writer.");
+                        break;
+                    }
+                    LOG4CXX_DEBUG(logger, "Received frame with pts: " << frame->best_effort_timestamp);
+                    if (frame->best_effort_timestamp > pts)
+                    {
+                        pts = frame->best_effort_timestamp;
+                    }
+                    frame.cv.wait(lock, [&frame](){return frame->best_effort_timestamp > pts;});
+                    std::this_thread::sleep_for(std::chrono::milliseconds(100));    //to simulate long write process
+                }
+            }
+        });
+    }
 }   //::<anon>

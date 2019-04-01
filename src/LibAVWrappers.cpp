@@ -25,7 +25,34 @@ namespace
     log4cxx::LoggerPtr logger(log4cxx::Logger::getLogger("zoombrd.LibAVWrappers"));
 //    static const int ALIGNMENT = 32;
 
-    void initVideoFrame(AVFrame* pFrame, int width, int height, AVPixelFormat format, AVColorSpace cs)
+    /// Prints info re: a video frame
+    /// @param[in] pFrame a video frame. If the frame is not a video frame, the results will be inaccurate
+    /// @param[in] indent number of tabs to indent by
+    /// @return a string containing info re: an audio frame
+    std::string getVideoFrameInfo(const AVFrame* pFrame, int indent)
+    {
+        assert(pFrame);
+        const std::string filler(indent, '\t');
+        std::stringstream ss;
+        ss << filler << "Timestamp:" << pFrame->best_effort_timestamp << std::endl;
+        ss << filler << "Picture Format: " << (AVPixelFormat) pFrame->format << std::endl;;
+        ss << filler << "Size (w x h): " << pFrame->width << "x" << pFrame->height << std::endl;
+        ss << filler << "Picture Type:" << pFrame->pict_type << std::endl;
+#ifndef NDEBUG
+        ss << filler << "Data allocated at " << static_cast<void*>(pFrame->data[0]) << std::endl;
+#endif
+        return ss.str();
+    };
+    
+
+} //<anon>
+
+namespace avtools
+{
+    // -------------------------------------------------
+    // Helper functions
+    // -------------------------------------------------
+    void initVideoFrame(AVFrame* pFrame, int width, int height, AVPixelFormat format, AVColorSpace cs/*=AVColorSpace::AVCOL_SPC_RGB*/)
     {
         assert(pFrame);
         //set metadata
@@ -40,33 +67,9 @@ namespace
         {
             throw MediaError("Error allocating data buffers for video frame", ret);
         }
-        LOG4CXX_DEBUG(logger, "Allocated frame data at " << static_cast<void*>(pFrame->data) << " with linesize = " << pFrame->linesize[0]);
+        LOG4CXX_DEBUG(logger, "Allocated frame data at " << static_cast<void*>(pFrame->data[0]) << " with linesize = " << pFrame->linesize[0]);
     }
-    
-    
-    /// Prints info re: a video frame
-    /// @param[in] pFrame a video frame. If the frame is not a video frame, the results will be inaccurate
-    /// @param[in] indent number of tabs to indent by
-    /// @return a string containing info re: an audio frame
-    std::string getVideoFrameInfo(const AVFrame* pFrame, int indent)
-    {
-        assert(pFrame);
-        const std::string filler(indent, '\t');
-        std::stringstream ss;
-        ss << filler << "Timestamp:" << pFrame->best_effort_timestamp << std::endl;
-        ss << filler << "Picture Format: " << (AVPixelFormat) pFrame->format << std::endl;;
-        ss << filler << "Size (w x h): " << pFrame->width << "x" << pFrame->height << std::endl;
-        ss << filler << "Aspect Ratio: " << pFrame->sample_aspect_ratio.num << "/" <<pFrame->sample_aspect_ratio.den << std::endl;
-//        ss << filler << "Colorspace: " << pFrame->colorspace << std::endl;
-        ss << filler << "Picture Type:" << pFrame->pict_type << std::endl;
-        return ss.str();
-    };
-    
 
-} //<anon>
-
-namespace avtools
-{
     // -------------------------------------------------
     // AVFrame wrapper
     // -------------------------------------------------
@@ -78,6 +81,10 @@ namespace avtools
         if (!pFrame_)
         {
             throw MediaError("Frame: Unable to allocate frame data.");
+        }
+        if (!pFrame)
+        {
+            pFrame_->pts = pFrame_->best_effort_timestamp = AV_NOPTS_VALUE;
         }
     }
 
@@ -130,10 +137,26 @@ namespace avtools
         if (!pFrame_)
         {
             type = AVMediaType::AVMEDIA_TYPE_UNKNOWN;
-            throw MediaError("Frame: Unable to clone frame.");
+            throw MediaError("Frame: Unable to copy construct frame.");
         }
     }
-    
+
+    Frame Frame::clone() const
+    {
+        Frame out(pFrame_->width, pFrame_->height, (AVPixelFormat) pFrame_->format, pFrame_->colorspace);
+        int ret = av_frame_copy_props(out.pFrame_, pFrame_);
+        if (ret < 0)
+        {
+            throw MediaError("Unable to copy frame properties to cloned frame", ret);
+        }
+        ret = av_frame_copy(out.pFrame_, pFrame_);
+        if (ret < 0)
+        {
+            throw MediaError("Unable to copy frame data to cloned frame", ret);
+        }
+        return out;
+    }
+
     Frame::~Frame()
     {
         if (pFrame_)
@@ -167,7 +190,8 @@ namespace avtools
                 return getVideoFrameInfo(pFrame_, indent);
                 break;
             default:    //may implement other typews in the future
-                throw std::invalid_argument("Frames of type " + std::to_string(type) + " are not implemented.");
+                LOG4CXX_ERROR(logger, "Information about frames of type " << type << + " are not available.");
+                return "No info available";
         }
     }
 
@@ -301,8 +325,6 @@ namespace avtools
         }
         return (buf ? std::string(buf.get()) : std::string());
     }
-
-
     
     // -------------------------------------------------
     // AVCodecContext wrapper

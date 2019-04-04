@@ -142,6 +142,16 @@ namespace
     /// @return a new thread that runs in the background, updates the warpedFrame when a new inFrame is available.
     std::thread threadedWarp(const ThreadsafeFrame& inFrame, ThreadsafeFrame& warpedFrame, const cv::Mat& trfMatrix);
 
+    /// Wraps a cv::mat around libav frames. Note that the matrix is just wrapped around the
+    /// existing data, so data is not cloned. Make sure that the matrix is done being used before reading new
+    /// data into the frame.
+    /// @param[in] frame a decoded video frame
+    /// @return a cv::mat wrapper around the frame data
+    inline cv::Mat getImage(const avtools::Frame& frame)
+    {
+        return cv::Mat(frame->height, frame->width, CV_8UC3, frame->data[0], frame->linesize[0]);
+    }
+
 } //::<anon>
 
 // The command we are trying to implement for one output stream is
@@ -218,6 +228,14 @@ int main(int argc, const char * argv[])
     // Open the output stream writers - one for lo-res, one for hi-res
     // -----------
 
+    while (cv::waitKey(50) < 0)
+    {
+        {
+            auto lock = trfFrame.getReadLock();
+            auto img = getImage(trfFrame);
+            cv::imshow("Warped image to write", img);
+        }
+    }
     std::thread writerThread1 = threadedWrite(trfFrame, outOptsLoRes);
     std::thread writerThread2 = threadedWrite(trfFrame, outOptsHiRes);
 
@@ -361,15 +379,6 @@ namespace
         fs.release();
     }
 
-    /// Wraps a cv::mat around libav frames. Note that the matrix is just wrapped around the
-    /// existing data, so data is not cloned. Make sure that the matrix is done being used before reading new
-    /// data into the frame.
-    /// @param[in] frame a decoded video frame
-    /// @return a cv::mat wrapper around the frame data
-    inline cv::Mat getImage(const avtools::Frame& frame)
-    {
-        return cv::Mat(frame->height, frame->width, CV_8UC3, frame->data[0], frame->linesize[0]);
-    }
 //    /// Converts a frame size string in WxH format to a size
 //    /// @param[in] sizeStr string containing size info
 //    /// @return a cv::Size containing the width and height parsed from sizeStr
@@ -408,6 +417,7 @@ namespace
     {
         std::vector<cv::Point2f> corners;   ///< Currently selected coordinates of the corners
         int draggedPt;                      ///< index of the point currently being dragged. -1 if none
+        std::string name;                   ///< Name of the window
 
         /// Mouse callback for the window, replacing cv::MouseCallback
         static void OnMouse(int event, int x, int y, int flags, void *userdata)
@@ -456,30 +466,79 @@ namespace
 
         /// Ctpr
         /// @param[in] name of the board
-        Board(const std::string& name):
-        draggedPt(-1)
+        Board(const std::string& _name):
+        draggedPt(-1),
+        name(_name)
         {
             assert(!name.empty());
             cv::namedWindow(name);
             cv::setMouseCallback(name, Board::OnMouse, this);
         }
+
+        ~Board()
+        {
+            cv::setMouseCallback(name, nullptr);
+            cv::destroyWindow(name);
+        }
     };  //<anon>::Board
+
+    /// Calculates the aspect ratio (width / height) of the board from the four corners
+    /// Reference:
+    /// Zhengyou Zhang & Li-wei He, "Whiteboard Scanning and Image Enhancement", Digital Signal Processing, April 2007
+    /// https://www.microsoft.com/en-us/research/publication/whiteboard-scanning-image-enhancement
+    /// http://dx.doi.org/10.1016/j.dsp.2006.05.006
+    /// Implementation examples:
+    /// https://stackoverflow.com/questions/1194352/proportions-of-a-perspective-deformed-rectangle/1222855#1222855
+    /// https://stackoverflow.com/questions/38285229/calculating-aspect-ratio-of-perspective-transform-destination-image
+    /// @param[in] corners the four corners of the board
+    /// @param[in] imSize size of the input images (where the corners belong)
+    /// @return the estimated aspect ration
+    float getAspectRatio(std::vector<cv::Point2f>& corners, const cv::Size& imSize)
+    {
+        // We will assume that corners contains the corners in the order top-left, top-right, bottom-right, bottom-left
+        assert(corners.size() == 4);
+        cv::Point2f center(imSize.width / 2.f, imSize.height / 2.f);
+        cv::Point2f m1 = corners[0] - center;   //tl
+        cv::Point2f m2 = corners[1] - center;   //tr
+        cv::Point2f m3 = corners[3] - center;   //bl
+        cv::Point2f m4 = corners[2] - center;   //br
+
+        //TODO: Check k2 & k3 for numeric stability
+        float k2 = ((m1.y-m4.y) * m3.x - (m1.x - m4.x) * m3.y + m1.x * m4.y - m1.y * m4.x) \
+            / ((m2.y - m4.y) * m3.x - (m2.x - m4.x) * m3.y + m2.x * m4.y - m2.y * m4.x);
+
+        float k3 = ((m1.y-m4.y) * m2.x - (m1.x - m4.x) * m2.y + m1.x * m4.y - m1.y * m4.x) \
+            / ((m3.y - m4.y) * m2.x - (m3.x - m4.x) * m2.y + m3.x * m4.y - m3.y * m4.x);
+
+        if ( (std::abs(k2 - 1.f) < 1E-4) || (std::abs(k3 - 1.f) < 1E-4) )
+        {
+            return std::sqrt( ( std::pow(m2.y - m1.y, 2) + std::pow(m2.x - m1.x, 2) )
+                / (std::pow(m3.y - m1.y, 2) + std::pow(m3.x - m1.x, 2)) );
+        }
+        else
+        {
+            float fSqr = std::abs( ((k3 * m3.y - m1.y) * (k2 * m2.y - m1.y) + (k3 * m3.x - m1.x) * (k2 * m2.x - m1.x)) \
+                / ((k3 - 1) * (k2 - 1)) );
+            return std::sqrt( ( std::pow(k2 - 1.f, 2) + (std::pow(k2 * m2.y - m1.y, 2) + std::pow(k2 * m2.x - m1.x, 2)) / fSqr )
+                / (std::pow(k3 - 1.f, 2) + (std::pow(k3 * m3.y - m1.y, 2) + std::pow(k3 * m3.x - m1.x, 2)) / fSqr ) );
+        }
+    }
 
     cv::Mat getPerspectiveTransformationMatrix(const ThreadsafeFrame& frame)
     {
         static const cv::Scalar FIXED_COLOR = cv::Scalar(0,0,255), DRAGGED_COLOR = cv::Scalar(255, 0, 0);
         static const std::string INPUT_WINDOW_NAME = "Input", OUTPUT_WINDOW_NAME = "Warped";
+        cv::namedWindow(OUTPUT_WINDOW_NAME);
         Board board(INPUT_WINDOW_NAME);
         avtools::Frame intermediateFrame, warpedFrame;
         cv::Mat trfMatrix, inputImg, warpedImg;
         std::unique_ptr<avtools::ImageConversionContext> hConvCtx;
         std::vector<cv::Point2f> TGT_CORNERS;
+
         //Initialize
         {
-//            ThreadsafeFrame::read_lock_t lock(frame.mutex);
             auto lock = frame.getReadLock();
             assert( (frame->width > 0) && (frame->height > 0) );
-            TGT_CORNERS = {cv::Point2f(0,0), cv::Point2f(frame->width, 0), cv::Point2f(frame->width, frame->height), cv::Point2f(0, frame->height)};
             if ( frame->format != PIX_FMT )
             {
                 assert (!hConvCtx);
@@ -489,10 +548,11 @@ namespace
             }
             warpedImg = cv::Mat(frame->height, frame->width, CV_8UC3);
         }
-        assert(TGT_CORNERS.size() == 4);
         //Start the loop
         while ( cv::waitKey(50) < 0 )    //wait for key press
         {
+//            cv::Size2f warpedSz(warpedImg.size());
+            cv::Rect2f roi(cv::Point2f(), warpedImg.size());
             // See if a new input image is available, and copy to intermediate frame if so
             {
                 auto lock = frame.tryReadLock(); //non-blocking attempt to lock
@@ -511,15 +571,54 @@ namespace
                     }
                 }
             }
-            // Display intermediateFrame and warpedFrame if available
+            // Display intermediateFrame and warpedFrame if four corners have been chosen
             inputImg = getImage(intermediateFrame);
             if (inputImg.total() > 0)
             {
+                const float IMG_ASPECT = (float) inputImg.cols / (float) inputImg.rows;
                 int nCorners = (int) board.corners.size();
                 if (nCorners == 4)
                 {
+                    //Calculate aspect ratio:
+                    float aspect = getAspectRatio(board.corners, inputImg.size());
+                    LOG4CXX_DEBUG(logger, "Calculated aspect ratio is: " << aspect);
+                    if (aspect > IMG_ASPECT)
+                    {
+                        roi.height = (float) warpedImg.cols / aspect;
+                        LOG4CXX_DEBUG(logger, "W>H, Adjusted dims are: " << roi);
+                        LOG4CXX_DEBUG(logger, "warpedImg size: " << warpedImg.size());
+                        roi.y = (warpedImg.rows - roi.height) / 2.f;
+//                        float delta = (warpedImg.rows - warpedSz.height) / 2.f;
+                        assert(roi.y >= 0.f);
+//                        TGT_CORNERS = {cv::Point2f(0,delta), cv::Point2f(warpedImg.cols, delta), cv::Point2f(warpedImg.cols, warpedImg.rows-delta), cv::Point2f(0, warpedImg.rows-delta)};
+                    }
+                    else
+                    {
+                        roi.width = (float) warpedImg.rows * aspect;
+                        LOG4CXX_DEBUG(logger, "H>W, Adjusted dims are: " << roi);
+                        roi.x = (warpedImg.cols - roi.width) / 2.f;
+                        assert(roi.x >= 0.f);
+//                        TGT_CORNERS = {cv::Point2f(delta,0), cv::Point2f(warpedImg.cols - delta, 0), cv::Point2f(warpedImg.cols-delta, warpedImg.rows), cv::Point2f(delta, warpedImg.rows)};
+                    }
+                    TGT_CORNERS = {roi.tl(), cv::Point2f(roi.x + roi.width, roi.y), roi.br(), cv::Point2f(roi.x, roi.y + roi.height)};
+
+                    LOG4CXX_DEBUG(logger, "Will transform " << board.corners << " to " << TGT_CORNERS);
                     trfMatrix = cv::getPerspectiveTransform(board.corners, TGT_CORNERS);
-                    cv::warpPerspective(inputImg, warpedImg, trfMatrix, inputImg.size());
+
+                    cv::Mat_<double> trfBr = trfMatrix * cv::Mat_<double>({board.corners[2].x, board.corners[2].y, 1.f});
+                    cv::Point2f br(trfBr[0][0], trfBr[1][0]);
+                    LOG4CXX_DEBUG(logger, "Calculated matrix " << trfMatrix << " will transform " << board.corners[2] << " to " << br);
+
+                    //Calculate the constant in the transformation
+                    float lambda = std::sqrt( (std::pow(TGT_CORNERS[2].x, 2) + std::pow(TGT_CORNERS[2].y, 2))
+                                             / (std::pow(br.x, 2) + std::pow(br.y, 2)) );
+                    trfMatrix = trfMatrix * lambda;
+//                    trfBr = trfMatrix * cv::Mat_<double>({board.corners[2].x, board.corners[2].y, 1.f});
+//                    br.x = trfBr[0][0];
+//                    br.y = trfBr[1][0];
+//                    LOG4CXX_DEBUG(logger, "Calculated matrix " << trfMatrix << " will transform " << board.corners[2] << " to " << br);
+                    auto tgtImg = warpedImg(roi);
+                    cv::warpPerspective(inputImg, tgtImg, trfMatrix, roi.size(), cv::InterpolationFlags::INTER_CUBIC);
                     for (int i = 0; i < 4; ++i)
                     {
                         cv::line(inputImg, board.corners[i], board.corners[(i+1) % 4], FIXED_COLOR);
@@ -535,9 +634,7 @@ namespace
                 cv::imshow(INPUT_WINDOW_NAME, inputImg);
             }
         }
-//        cv::destroyWindow(INPUT_WINDOW_NAME);
-//        cv::destroyWindow(OUTPUT_WINDOW_NAME);
-        cv::destroyAllWindows();
+        cv::destroyWindow(OUTPUT_WINDOW_NAME);
         if (board.corners.size() == 4)
         {
             assert(trfMatrix.total() > 0);
@@ -547,7 +644,6 @@ namespace
         {
             throw std::runtime_error("Perspective transform requires 4 points.");
         }
-//        std::this_thread::sleep_for(std::chrono::nanoseconds(1000000));
         return trfMatrix;
     }
 
@@ -662,6 +758,15 @@ namespace
     {
         return std::thread([&inFrame, &warpedFrame, trfMatrix](){
             log4cxx::MDC::put("threadname", "warper");
+            std::unique_ptr<avtools::ImageConversionContext> hCtx = nullptr;
+            {
+                auto lk1 = inFrame.getReadLock();
+                auto lk2 = warpedFrame.getReadLock();
+                if ((inFrame->width != warpedFrame->width) || (inFrame->height != warpedFrame->height) || (inFrame->format != warpedFrame->format) )
+                {
+                    hCtx = std::make_unique<avtools::ImageConversionContext>(inFrame->width, inFrame->height, (AVPixelFormat) inFrame->format, warpedFrame->width, warpedFrame->height, (AVPixelFormat) warpedFrame->format);
+                }
+            }
             try
             {
                 while (inFrame)
@@ -673,12 +778,12 @@ namespace
                         if ( (inFrame->best_effort_timestamp > warpedFrame->best_effort_timestamp) || (warpedFrame->best_effort_timestamp == AV_NOPTS_VALUE) )
                         {
                             const cv::Mat inImg = getImage(inFrame);
+                            //TODO: ADD ImageConvertor to change image pixel format, or adjust transform accordingly
+                            // Results will be different, so this should be tested for quality
                             cv::Mat outImg = getImage(warpedFrame);
                             cv::warpPerspective(inImg, outImg, trfMatrix, inImg.size());
-//                            warpedFrame->best_effort_timestamp = inFrame->best_effort_timestamp;
-//                            warpedFrame->pts = inFrame->pts;
                             av_frame_copy_props(warpedFrame.get(), inFrame.get());
-                            LOG4CXX_DEBUG(logger, "Warped frame info: " << warpedFrame.info());
+                            LOG4CXX_DEBUG(logger, "Warped frame info: " << warpedFrame.info(1));
                         }
                     }
                 }

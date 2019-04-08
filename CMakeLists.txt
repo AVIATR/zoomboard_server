@@ -82,7 +82,7 @@ message(STATUS "BINARY DIR = ${PROJECT_BINARY_DIR}")
 
 #Add source folder
 add_subdirectory("src")
-configure_file("config.json" ${PROJECT_BINARY_DIR} COPYONLY)
+configure_file("config.json" $<TARGET_FILE:${PROJ_NAME}> COPYONLY)
 
 # CPack packaging
 include(InstallRequiredSystemLibraries)

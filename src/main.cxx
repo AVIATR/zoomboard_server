@@ -222,6 +222,7 @@ int main(int argc, const char * argv[])
     assert( (AV_NOPTS_VALUE == trfFrame->best_effort_timestamp) && (AV_NOPTS_VALUE == trfFrame->pts) );
     // Get corners of the board
     cv::Mat trfMatrix = getPerspectiveTransformationMatrix(inFrame);
+    return EXIT_FAILURE;
     // Start the warper thread
     std::thread warperThread = threadedWarp(inFrame, trfFrame, trfMatrix);
     // -----------
@@ -551,7 +552,6 @@ namespace
         //Start the loop
         while ( cv::waitKey(50) < 0 )    //wait for key press
         {
-//            cv::Size2f warpedSz(warpedImg.size());
             cv::Rect2f roi(cv::Point2f(), warpedImg.size());
             // See if a new input image is available, and copy to intermediate frame if so
             {
@@ -585,38 +585,29 @@ namespace
                     if (aspect > IMG_ASPECT)
                     {
                         roi.height = (float) warpedImg.cols / aspect;
-                        LOG4CXX_DEBUG(logger, "W>H, Adjusted dims are: " << roi);
-                        LOG4CXX_DEBUG(logger, "warpedImg size: " << warpedImg.size());
                         roi.y = (warpedImg.rows - roi.height) / 2.f;
-//                        float delta = (warpedImg.rows - warpedSz.height) / 2.f;
                         assert(roi.y >= 0.f);
-//                        TGT_CORNERS = {cv::Point2f(0,delta), cv::Point2f(warpedImg.cols, delta), cv::Point2f(warpedImg.cols, warpedImg.rows-delta), cv::Point2f(0, warpedImg.rows-delta)};
                     }
                     else
                     {
                         roi.width = (float) warpedImg.rows * aspect;
-                        LOG4CXX_DEBUG(logger, "H>W, Adjusted dims are: " << roi);
                         roi.x = (warpedImg.cols - roi.width) / 2.f;
                         assert(roi.x >= 0.f);
-//                        TGT_CORNERS = {cv::Point2f(delta,0), cv::Point2f(warpedImg.cols - delta, 0), cv::Point2f(warpedImg.cols-delta, warpedImg.rows), cv::Point2f(delta, warpedImg.rows)};
                     }
                     TGT_CORNERS = {roi.tl(), cv::Point2f(roi.x + roi.width, roi.y), roi.br(), cv::Point2f(roi.x, roi.y + roi.height)};
 
-                    LOG4CXX_DEBUG(logger, "Will transform " << board.corners << " to " << TGT_CORNERS);
+                    LOG4CXX_DEBUG(logger, "Will transform \n" << board.corners << " to \n" << TGT_CORNERS);
                     trfMatrix = cv::getPerspectiveTransform(board.corners, TGT_CORNERS);
 
                     cv::Mat_<double> trfBr = trfMatrix * cv::Mat_<double>({board.corners[2].x, board.corners[2].y, 1.f});
                     cv::Point2f br(trfBr[0][0], trfBr[1][0]);
-                    LOG4CXX_DEBUG(logger, "Calculated matrix " << trfMatrix << " will transform " << board.corners[2] << " to " << br);
 
                     //Calculate the constant in the transformation
                     float lambda = std::sqrt( (std::pow(TGT_CORNERS[2].x, 2) + std::pow(TGT_CORNERS[2].y, 2))
                                              / (std::pow(br.x, 2) + std::pow(br.y, 2)) );
                     trfMatrix = trfMatrix * lambda;
-//                    trfBr = trfMatrix * cv::Mat_<double>({board.corners[2].x, board.corners[2].y, 1.f});
-//                    br.x = trfBr[0][0];
-//                    br.y = trfBr[1][0];
-//                    LOG4CXX_DEBUG(logger, "Calculated matrix " << trfMatrix << " will transform " << board.corners[2] << " to " << br);
+                    LOG4CXX_DEBUG(logger, "Calculated matrix " << trfMatrix << " will transform " << board.corners[2] << " to " << br);
+                    warpedImg.setTo(cv::Scalar{0,0,0});
                     auto tgtImg = warpedImg(roi);
                     cv::warpPerspective(inputImg, tgtImg, trfMatrix, roi.size(), cv::InterpolationFlags::INTER_CUBIC);
                     for (int i = 0; i < 4; ++i)

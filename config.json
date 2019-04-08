@@ -7,7 +7,7 @@
             "stream_options":
             {
                 "framerate": "30",
-                "video_size": "320x240",
+                "video_size": "848x480",
                 "pixel_format": "rgb24"
             }
         },

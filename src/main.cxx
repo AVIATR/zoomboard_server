@@ -84,8 +84,11 @@ namespace
     /// Threads subscribe to this frame via subscribe(). When a new frame is available (After an update()),
     /// all subscribers are called with notify() to give them access to the underlying frame.
     /// Also see https://en.cppreference.com/w/cpp/thread/shared_mutex for single writer/multiple reader example
-    struct ThreadsafeFrame: public avtools::Frame
+    class ThreadsafeFrame: public avtools::Frame
     {
+    private:
+        SwsContext* pConvCtx_;                                              ///< Image conversion context used if the update images are different than the declared frame dimensions or format
+    public:
         typedef std::shared_lock<std::shared_timed_mutex> read_lock_t;      ///< Read lock type, allows for multi-threaded read
         typedef std::unique_lock<std::shared_timed_mutex> write_lock_t;     ///< Write lock type, only one thread can write
 
@@ -96,8 +99,6 @@ namespace
         /// @param[in] height of the frame
         /// @param[in] format frame format
         ThreadsafeFrame(int width, int height, AVPixelFormat format);
-        /// Default ctor
-        ThreadsafeFrame();
         /// Dtor
         virtual ~ThreadsafeFrame();
         /// Called from the writer threa to update the frame
@@ -211,9 +212,9 @@ int main(int argc, const char * argv[])
     LOG4CXX_DEBUG(logger, "Input options are:\n" << inOpts.streamOptions.as_string() << "\nOpening reader.");
     avtools::MediaReader rdr(inOpts.url, inOpts.streamOptions, avtools::InputMediaType::CAPTURE_DEVICE);
     const AVStream* pVidStr = rdr.getVideoStream();
-    ThreadsafeFrame inFrame(pVidStr->codecpar->width, pVidStr->codecpar->height, (AVPixelFormat) pVidStr->codecpar->format);
-    std::thread readerThread = threadedRead(inFrame, rdr);
+    ThreadsafeFrame inFrame(pVidStr->codecpar->width, pVidStr->codecpar->height, PIX_FMT);
 
+    std::thread readerThread = threadedRead(inFrame, rdr);
     // -----------
     // Add transformer
     // -----------
@@ -222,19 +223,18 @@ int main(int argc, const char * argv[])
     assert( (AV_NOPTS_VALUE == trfFrame->best_effort_timestamp) && (AV_NOPTS_VALUE == trfFrame->pts) );
     // Get corners of the board
     cv::Mat trfMatrix = getPerspectiveTransformationMatrix(inFrame);
-    return EXIT_FAILURE;
     // Start the warper thread
     std::thread warperThread = threadedWarp(inFrame, trfFrame, trfMatrix);
     // -----------
     // Open the output stream writers - one for lo-res, one for hi-res
     // -----------
-
+    const std::string OUTPUT_WINDOW = "Warped image";
+    cv::namedWindow(OUTPUT_WINDOW);
     while (cv::waitKey(50) < 0)
     {
         {
             auto lock = trfFrame.getReadLock();
-            auto img = getImage(trfFrame);
-            cv::imshow("Warped image to write", img);
+            cv::imshow(OUTPUT_WINDOW, getImage(trfFrame));
         }
     }
     std::thread writerThread1 = threadedWrite(trfFrame, outOptsLoRes);
@@ -253,6 +253,12 @@ int main(int argc, const char * argv[])
 
 namespace
 {
+    template<typename T>
+    std::string to_string(const cv::Point_<T>& pt)
+    {
+        return "(" + std::to_string(pt.x) + "," + std::to_string(pt.y) + ")";
+    }
+
     /// Reads all the entries in a file node into a dictionary
     /// @param[in] node json file node to read from
     /// @param[out] dict dictionary to save entries into
@@ -493,11 +499,19 @@ namespace
     /// https://stackoverflow.com/questions/38285229/calculating-aspect-ratio-of-perspective-transform-destination-image
     /// @param[in] corners the four corners of the board
     /// @param[in] imSize size of the input images (where the corners belong)
-    /// @return the estimated aspect ration
+    /// @return the estimated aspect ratio
+    /// @throw runtime_error if the corners do not have sufficient separation to calculate the aspect ratio
     float getAspectRatio(std::vector<cv::Point2f>& corners, const cv::Size& imSize)
     {
         // We will assume that corners contains the corners in the order top-left, top-right, bottom-right, bottom-left
         assert(corners.size() == 4);
+        for (int i = 0; i < 4; ++i)
+        {
+            if (cv::norm(corners[i] - corners[(i+1)%4]) < 1)
+            {
+                throw std::runtime_error("The provided corners " + to_string(corners[i]) + " and " + to_string(corners[(i+1)%4]) + "are too close.");
+            }
+        }
         cv::Point2f center(imSize.width / 2.f, imSize.height / 2.f);
         cv::Point2f m1 = corners[0] - center;   //tl
         cv::Point2f m2 = corners[1] - center;   //tr
@@ -511,8 +525,9 @@ namespace
         float k3 = ((m1.y-m4.y) * m2.x - (m1.x - m4.x) * m2.y + m1.x * m4.y - m1.y * m4.x) \
             / ((m3.y - m4.y) * m2.x - (m3.x - m4.x) * m2.y + m3.x * m4.y - m3.y * m4.x);
 
-        if ( (std::abs(k2 - 1.f) < 1E-4) || (std::abs(k3 - 1.f) < 1E-4) )
+        if ( (std::abs(k2 - 1.f) < 1E-8) || (std::abs(k3 - 1.f) < 1E-8) )
         {
+            LOG4CXX_DEBUG(logger, "parallel? k2 = " << k2 << ", k3 = " << k3);
             return std::sqrt( ( std::pow(m2.y - m1.y, 2) + std::pow(m2.x - m1.x, 2) )
                 / (std::pow(m3.y - m1.y, 2) + std::pow(m3.x - m1.x, 2)) );
         }
@@ -520,6 +535,7 @@ namespace
         {
             float fSqr = std::abs( ((k3 * m3.y - m1.y) * (k2 * m2.y - m1.y) + (k3 * m3.x - m1.x) * (k2 * m2.x - m1.x)) \
                 / ((k3 - 1) * (k2 - 1)) );
+            LOG4CXX_DEBUG(logger, "Calculated f^2 = " << fSqr << "[k2 = " << k2 << ", k3=" << k3 <<"]");
             return std::sqrt( ( std::pow(k2 - 1.f, 2) + (std::pow(k2 * m2.y - m1.y, 2) + std::pow(k2 * m2.x - m1.x, 2)) / fSqr )
                 / (std::pow(k3 - 1.f, 2) + (std::pow(k3 * m3.y - m1.y, 2) + std::pow(k3 * m3.x - m1.x, 2)) / fSqr ) );
         }
@@ -532,7 +548,8 @@ namespace
         cv::namedWindow(OUTPUT_WINDOW_NAME);
         Board board(INPUT_WINDOW_NAME);
         avtools::Frame intermediateFrame, warpedFrame;
-        cv::Mat trfMatrix, inputImg, warpedImg;
+        cv::Mat_<double> trfMatrix;
+        cv::Mat inputImg, warpedImg;
         std::unique_ptr<avtools::ImageConversionContext> hConvCtx;
         std::vector<cv::Point2f> TGT_CORNERS;
 
@@ -566,7 +583,6 @@ namespace
                     }
                     else
                     {
-                        assert( (intermediateFrame->width == frame->width) && (intermediateFrame->height == frame->height) && (intermediateFrame->format == frame->format) );
                         intermediateFrame = frame.clone();
                     }
                 }
@@ -596,17 +612,21 @@ namespace
                     }
                     TGT_CORNERS = {roi.tl(), cv::Point2f(roi.x + roi.width, roi.y), roi.br(), cv::Point2f(roi.x, roi.y + roi.height)};
 
-                    LOG4CXX_DEBUG(logger, "Will transform \n" << board.corners << " to \n" << TGT_CORNERS);
+                    LOG4CXX_DEBUG(logger, "Need to transform \n" << board.corners << " to \n" << TGT_CORNERS);
                     trfMatrix = cv::getPerspectiveTransform(board.corners, TGT_CORNERS);
 
-                    cv::Mat_<double> trfBr = trfMatrix * cv::Mat_<double>({board.corners[2].x, board.corners[2].y, 1.f});
-                    cv::Point2f br(trfBr[0][0], trfBr[1][0]);
-
                     //Calculate the constant in the transformation
+                    cv::Point2f br(
+                            trfMatrix[0][0] * board.corners[2].x + trfMatrix[0][1] * board.corners[2].y + trfMatrix[0][2],
+                            trfMatrix[1][0] * board.corners[2].x + trfMatrix[1][1] * board.corners[2].y + trfMatrix[1][2]);
+                    LOG4CXX_DEBUG(logger, "Calculated matrix \n" << trfMatrix << " will transform \n" << board.corners[2] << " to \n" << br);
                     float lambda = std::sqrt( (std::pow(TGT_CORNERS[2].x, 2) + std::pow(TGT_CORNERS[2].y, 2))
                                              / (std::pow(br.x, 2) + std::pow(br.y, 2)) );
-                    trfMatrix = trfMatrix * lambda;
-                    LOG4CXX_DEBUG(logger, "Calculated matrix " << trfMatrix << " will transform " << board.corners[2] << " to " << br);
+                    trfMatrix = trfMatrix * (double) lambda;
+                    br.x = trfMatrix[0][0] * board.corners[2].x + trfMatrix[0][1] * board.corners[2].y + trfMatrix[0][2];
+                    br.y = trfMatrix[1][0] * board.corners[2].x + trfMatrix[1][1] * board.corners[2].y + trfMatrix[1][2];
+
+                    LOG4CXX_DEBUG(logger, "Scaled matrix (lambda=" << lambda << ")\n" << trfMatrix << " will transform \n" << board.corners[2] << " to \n" << br);
                     warpedImg.setTo(cv::Scalar{0,0,0});
                     auto tgtImg = warpedImg(roi);
                     cv::warpPerspective(inputImg, tgtImg, trfMatrix, roi.size(), cv::InterpolationFlags::INTER_CUBIC);
@@ -641,21 +661,21 @@ namespace
     // ---------------------------
     // Threadsafe Frame Definitions
     // ---------------------------
-    ThreadsafeFrame::ThreadsafeFrame():
-    Frame(),
-    mutex(),
-    cv()
-    {
-    }
-
     ThreadsafeFrame::ThreadsafeFrame(int width, int height, AVPixelFormat format):
     Frame(width, height, format),
+    pConvCtx_(nullptr),
     mutex(),
     cv()
     {
     }
 
-    ThreadsafeFrame::~ThreadsafeFrame() = default;
+    ThreadsafeFrame::~ThreadsafeFrame()
+    {
+        if (pConvCtx_)
+        {
+            sws_freeContext(pConvCtx_);
+        }
+    };
 
     void ThreadsafeFrame::update(const avtools::Frame &frm)
     {
@@ -665,18 +685,23 @@ namespace
             LOG4CXX_DEBUG(logger, "Updating threadsafe frame with " << frm.info(1));
             {
                 auto lock = getWriteLock();
-                assert(lock.owns_lock());
-                if ( (pFrame_->width != frm->width) || (pFrame_->height != frm->height) || (pFrame_->format != frm->format) || (pFrame_->colorspace != frm->colorspace) )
-                {
-                    LOG4CXX_DEBUG(logger, "Updating frame requires reinitialization");
-                    av_frame_unref(pFrame_);
-                    avtools::initVideoFrame(pFrame_, frm->width, frm->height, (AVPixelFormat) frm->format, frm->colorspace);
-                }
-                assert( (pFrame_->width == frm->width) && (pFrame_->height == frm->height) && (pFrame_->format == frm->format) && (pFrame_->colorspace == frm->colorspace) );
                 assert(frm->data[0] && pFrame_->data[0]);
+                if ( (pFrame_->width != frm->width) || (pFrame_->height != frm->height) || (pFrame_->format != frm->format) )
+                {
+                    LOG4CXX_DEBUG(logger, "Converting frame...");
+                    pConvCtx_ = sws_getCachedContext(pConvCtx_, frm->width, frm->height, (AVPixelFormat) frm->format, pFrame_->width, pFrame_->height, (AVPixelFormat) pFrame_->format, SWS_LANCZOS | SWS_ACCURATE_RND, nullptr, nullptr, nullptr);
+                    int ret = sws_scale(pConvCtx_, frm->data, frm->linesize, 0, frm->height, pFrame_->data, pFrame_->linesize);
+                    if (ret < 0)
+                    {
+                        throw avtools::MediaError("Error converting frame to output format.", ret);
+                    }
+                }
+                else
+                {
+                    av_frame_copy(pFrame_, frm.get());
+                }
+
                 av_frame_copy_props(pFrame_, frm.get());
-                av_frame_copy(pFrame_, frm.get());
-                type = frm.type;
                 LOG4CXX_DEBUG(logger, "Updated frame info: " << info(1));
             }
         }

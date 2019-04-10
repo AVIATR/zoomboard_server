@@ -196,19 +196,20 @@ namespace avtools
 
         Implementation(
             const std::string& url,
-            const AVCodecParameters& codecParam,
+            const CodecParameters& codecParam,
             const TimeBaseType& timebase,
-            Dictionary& dict
+            Dictionary& strOpts,
+            Dictionary& codecOpts
         ):
         formatCtx_(FormatContext::OUTPUT),
-        codecCtx_(CodecParameters(&codecParam)),
+        codecCtx_(codecParam),
         pkt_()
         {
-            assert (codecParam.codec_type == AVMEDIA_TYPE_VIDEO);
+            assert (codecParam->codec_type == AVMEDIA_TYPE_VIDEO);
             avdevice_register_all();    // Register devices
 
             // Find encoder
-            const AVCodecID codecId = codecParam.codec_id;
+            const AVCodecID codecId = codecParam->codec_id;
             //Init outout format context, open output file or stream
             int ret = avformat_alloc_output_context2(&formatCtx_.get(), nullptr, nullptr, url.c_str());
             if (ret < 0)
@@ -228,7 +229,8 @@ namespace avtools
             // Open IO Context
             if ( !(formatCtx_->flags & AVFMT_NOFILE) )
             {
-                ret = avio_open2(&formatCtx_->pb, url.c_str(), AVIO_FLAG_WRITE, nullptr, &dict.get());
+                ret = avio_open2(&formatCtx_->pb, url.c_str(), AVIO_FLAG_WRITE, nullptr, &strOpts.get());
+                LOG4CXX_DEBUG(logger, "Unused stream options: " << strOpts.as_string());
                 if (ret < 0)
                 {
                     throw MediaError("Could not open " + url, ret);
@@ -238,23 +240,25 @@ namespace avtools
             LOG4CXX_DEBUG(logger, "MediaWriter: Opened output file " << url << " in " << pOutFormat->long_name << " format.");
             //Add the video stream to the output context
             // Set up encoder context
-            ret = avcodec_parameters_to_context(codecCtx_.get(), &codecParam);
-            if (ret < 0)
-            {
-                throw MediaError("Unable to copy codec parameters to encoder context.", ret);
-            }
+//            ret = avcodec_parameters_to_context(codecCtx_.get(), codecCtx_.get());
+//            if (ret < 0)
+//            {
+//                throw MediaError("Unable to copy codec parameters to encoder context.", ret);
+//            }
 
             //Initialize codec context
             codecCtx_->strict_std_compliance = COMPLIANCE;
             codecCtx_->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;    // let codec know if we are using global header
             codecCtx_->time_base = timebase;                    // Set timebase
-
+            av_opt_set(codecCtx_->priv_data, "preset", "ultrafast", 0);
+            av_opt_set(codecCtx_->priv_data, "tune", "zerolatency", 0);
             const AVCodec* pEncoder = avcodec_find_encoder(codecId);
             if (!pEncoder)
             {
                 throw MediaError("Cannot find an encoder for " + std::to_string(codecId));
             }
-            ret = avcodec_open2(codecCtx_.get(), pEncoder, &dict.get());
+            ret = avcodec_open2(codecCtx_.get(), pEncoder, &codecOpts.get());
+            LOG4CXX_DEBUG(logger, "Unused codec options: " << codecOpts.as_string());
             if (ret < 0)
             {
                 throw MediaError("Unable to open encoder context", ret);
@@ -287,6 +291,16 @@ namespace avtools
             formatCtx_.dumpContainerInfo();
 #endif
         }
+
+        Implementation(
+                       const std::string& url,
+                       const AVCodecParameters& codecParam,
+                       const TimeBaseType& timebase,
+                       Dictionary& strOpts,
+                       Dictionary& codecOpts
+                       ):
+        Implementation(url, CodecParameters(&codecParam), timebase, strOpts, codecOpts)
+        {}
 
         /// Dtor
         ~Implementation()
@@ -387,8 +401,8 @@ namespace avtools
     ):
     pImpl_( nullptr )
     {
-        Dictionary dict;
-        pImpl_ = std::make_unique<Implementation>(url, codecParam, timebase, dict);
+        Dictionary dict1, dict2;
+        pImpl_ = std::make_unique<Implementation>(url, codecParam, timebase, dict1, dict2);
         assert ( pImpl_ );
     }
 
@@ -397,9 +411,23 @@ namespace avtools
         const std::string& url,
         const AVCodecParameters& codecParam, 
         const TimeBaseType& timebase,
-        Dictionary& dict
+        Dictionary& strOpts,
+        Dictionary& codecOpts
     ):
-    pImpl_( std::make_unique<Implementation>(url, codecParam, timebase, dict) )
+    pImpl_( std::make_unique<Implementation>(url, codecParam, timebase, strOpts, codecOpts) )
+    {
+        assert ( pImpl_ );
+    }
+
+    MediaWriter::MediaWriter
+    (
+     const std::string& url,
+     const CodecParameters& codecParam,
+     const TimeBaseType& timebase,
+     Dictionary& streamOpts,
+     Dictionary& codecOpts
+     ):
+    pImpl_( std::make_unique<Implementation>(url, codecParam, timebase, streamOpts, codecOpts) )
     {
         assert ( pImpl_ );
     }

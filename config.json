@@ -26,22 +26,34 @@
     {
         "lores":
         {
-            "url": "localhost",
+            "url": "stream_lr.m4v",
             "stream_options":
             {
                 "framerate": "30",
-                "video_size": "320x240",
-                "pixel_format": "yuv420"
+                "video_size": "384x216"
+            },
+            "codec_options":
+            {
+                "pixel_format": "yuv420p",
+                "profile": "main",
+                "preset": "ultrafast",
+                "tune": "zerolatency"
             }
         },
         "hires":
         {
-            "url": "localhost",
+            "url": "stream_hr.m4v",
             "stream_options":
             {
                 "framerate": "5",
-                "video_size": "640x480",
-                "pixel_format": "yuv420"
+                "video_size": "848x480"
+            },
+            "codec_options":
+            {
+                "pixel_format": "yuv420p",
+                "profile": "main",
+                "preset": "ultrafast",
+                "tune": "zerolatency"
             }
         }        
     }

@@ -9,3 +9,8 @@ This project depends on a few external open-source libraries:
 
 ## Configuration file
 This json file provides the necessary configuration options (input device, resolution, frame rate, other ffmpeg options). as well as the output url and options. For details about the input device options, see the [ffmpeg faq about capture devices](https://trac.ffmpeg.org/wiki/Capture/Webcam).
+
+
+## References
+### X264 Settings
+We are using libx264 for encoding. The presets and how they correspond to various codec parameters can be found [here](http://dev.beandog.org/x264_preset_reference.html). If you have the `x264` binary installed, you can also see the installed presets by `x264 --fullhelp`.

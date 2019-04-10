@@ -32,19 +32,22 @@
 #  LOG4CXX_LIBRARIES          The Log4cxx libraries
 #  LOG4CXX_INCLUDE_DIRS       The location of Log4cxx headers
 
-message ("\nLooking for log4cxx headers and libraries")
-
+message (STATUS "\nLooking for log4cxx headers and libraries")
 if (LOG4CXX_ROOT_DIR) 
     message (STATUS "Root dir: ${LOG4CXX_ROOT_DIR}")
 endif ()
 
 find_package(PkgConfig)
-pkg_check_modules(PC_LOG4CXX log4cxx)
+pkg_check_modules(PC_LOG4CXX liblog4cxx)
 set(LOG4CXX_DEFINITIONS ${PC_LOG4CXX_CFLAGS_OTHER})
+#if( PKG_CONFIG_FOUND )
+#    pkg_search_module( PC_LIBLOG4CXX liblog4cxx )
+#endif( PKG_CONFIG_FOUND )
+    
 
 find_path(LOG4CXX_INCLUDE_DIR 
 	NAMES
-		log4cxx.h
+		log4cxx
     PATHS 
 		${LOG4CXX_ROOT_DIR}/include
         ${PC_LOG4CXX_INCLUDEDIR} 

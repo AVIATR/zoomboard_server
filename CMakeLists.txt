@@ -18,10 +18,8 @@ project("${PROJ_NAME}"
 	LANGUAGES CXX
 	VERSION 0.1.0)
 
-set(CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/cmake_modules" ${CMAKE_MODULE_PATH})
 #set(CMAKE_OSX_ARCHITECTURES "x86_64;i386")
 set( CMAKE_VERBOSE_MAKEFILE on )	#uncomment for make script debugging purposes
-message(STATUS "Module path set to: ${CMAKE_MODULE_PATH}")
 
 # Enable debug symbols by default (you can also set it on the command line: -D CMAKE_BUILD_TYPE=Release)
 if(NOT DEFINED CMAKE_BUILD_TYPE)
@@ -49,6 +47,17 @@ endif()
 ###################################
 # Detect and add external libraries
 ###################################
+set(CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/cmake_modules" ${CMAKE_MODULE_PATH})
+message(STATUS "Module path set to: ${CMAKE_MODULE_PATH}")
+
+#Find Log4cxx
+find_package(LOG4CXX REQUIRED)
+if (LOG4CXX_FOUND)
+    message(STATUS "LOG4CXX Found")
+    message(STATUS "LOG4CXX_LIBRARY_NAME = ${LOG4CXX_LIBRARIES}")
+    message(STATUS "LOG4CXX_INCLUDE_DIRS = ${LOG4CXX_INCLUDE_DIRS}")
+endif()
+
 # Find ffmpeg
 find_package(FFMPEG REQUIRED)
 if (FFMPEG_FOUND)
@@ -65,13 +74,6 @@ if (OpenCV_FOUND)
     message(STATUS "OpenCV_INCLUDE_DIRS = ${OpenCV_INCLUDE_DIRS}")
 endif()
 
-#Find Log4cxx
-find_package(LOG4CXX REQUIRED)
-if (LOG4CXX_FOUND)
-    message(STATUS "Log4Cxx Found")
-    message(STATUS "LOG4CXX_LIBRARY_NAME = ${LOG4CXX_LIBRARIES}")
-    message(STATUS "LOG4CXX_INCLUDE_DIRS = ${LOG4CXX_INCLUDE_DIRS}")
-endif()
 ###################################
 # Configure files
 ###################################
@@ -79,7 +81,7 @@ message("\nProject = ${PROJECT_NAME}")
 message(STATUS "Build type = ${CMAKE_BUILD_TYPE}")
 message(STATUS "SOURCE DIR = ${PROJECT_SOURCE_DIR}")
 message(STATUS "BINARY DIR = ${PROJECT_BINARY_DIR}")
-
+message(STATUS "Target folder = $<TARGET_FILE:${PROJ_NAME}>")
 #Add source folder
 add_subdirectory("src")
 configure_file("config.json" $<TARGET_FILE:${PROJ_NAME}> COPYONLY)

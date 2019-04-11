@@ -238,21 +238,7 @@ namespace avtools
                 assert(formatCtx_->pb);
             }
             LOG4CXX_DEBUG(logger, "MediaWriter: Opened output file " << url << " in " << pOutFormat->long_name << " format.");
-            //Add the video stream to the output context
-            // Set up encoder context
-//            ret = avcodec_parameters_to_context(codecCtx_.get(), codecParam.get());
-//            if (ret < 0)
-//            {
-//                throw MediaError("Unable to copy codec parameters to encoder context.", ret);
-//            }
-
             //Initialize codec context
-            const AVCodec* pEncoder = avcodec_find_encoder(codecId);
-            if (!pEncoder)
-            {
-                throw MediaError("Cannot find an encoder for " + std::to_string(codecId));
-            }
-
             codecCtx_->strict_std_compliance = COMPLIANCE;
             codecCtx_->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;    // let codec know we are using global header
             codecCtx_->time_base = timebase;                    // Set timebase
@@ -276,8 +262,12 @@ namespace avtools
             av_opt_set(codecCtx_->priv_data, "coder_type", "1", 0);
             av_opt_set(codecCtx_->priv_data, "scenechange_threshold", "40", 0);
 
-//            codecCtx_->pix_fmt = avcodec_default_get_format(codecCtx_.get(), pEncoder->pix_fmts);
-//            codecCtx_->pix_fmt = AVPixelFormat::AV_PIX_FMT_YUV420P;
+            // Open en coder
+            const AVCodec* pEncoder = avcodec_find_encoder(codecId);
+            if (!pEncoder)
+            {
+                throw MediaError("Cannot find an encoder for " + std::to_string(codecId));
+            }
             int losses = 0;
             codecCtx_->pix_fmt = avcodec_find_best_pix_fmt_of_list(pEncoder->pix_fmts, (AVPixelFormat) codecParam->format, false, &losses);
             if (codecCtx_->pix_fmt != codecParam->format)
@@ -323,11 +313,11 @@ namespace avtools
         }
 
         Implementation(
-                       const std::string& url,
-                       const AVCodecParameters& codecParam,
-                       const TimeBaseType& timebase,
-                       Dictionary& opts
-                       ):
+            const std::string& url,
+            const AVCodecParameters& codecParam,
+            const TimeBaseType& timebase,
+            Dictionary& opts
+        ):
         Implementation(url, CodecParameters(&codecParam), timebase, opts)
         {}
 
@@ -402,8 +392,6 @@ namespace avtools
                 pkt_->pts = av_rescale_q(pkt_->pts, codecCtx_->time_base, pStr->time_base);   //this is necessary since writing the header can change the time_base of the stream.
                 pkt_->dts = av_rescale_q(pkt_->dts, codecCtx_->time_base, pStr->time_base);
                 pkt_->duration = av_rescale_q(pkt_->duration, codecCtx_->time_base, pStr->time_base);
-//                LOGD("Muxing packet for ", *pCtx_->streams[stream]);
-//                LOGD("\tpts = ", pkt->pts, ", time_base = ", pCtx_->streams[stream]->time_base, ";\ttime(s) = ", avtools::calculateTime(pkt->pts, pCtx_->streams[stream]->time_base));
         
                 //mux encoded frame
                 ret = av_interleaved_write_frame(formatCtx_.get(), pkt_.get());

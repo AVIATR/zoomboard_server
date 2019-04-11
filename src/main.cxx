@@ -98,7 +98,7 @@ namespace
         ThreadsafeFrame(int width, int height, AVPixelFormat format);
         /// Dtor
         virtual ~ThreadsafeFrame();
-        /// Called from the writer threa to update the frame
+        /// Updates the frame in a thread-safe manner
         /// @param[in] frame new frame that will replace the existing frame
         void update(const avtools::Frame& frame);
 
@@ -230,8 +230,6 @@ int main(int argc, const char * argv[])
     // -----------
     avtools::CodecParameters codecPar(pVidStr->codecpar);
     codecPar->codec_id = AVCodecID::AV_CODEC_ID_H264;
-    LOG4CXX_DEBUG(logger, "Codec parameters " << codecPar.info());
-
     avtools::MediaWriter lrWriter(outOptsLoRes.url, codecPar, pVidStr->time_base, outOptsLoRes.options);
     //    avtools::MediaWriter hrWriter(outOptsHiRes.url, codecPar, pVidStr->time_base, outOptsHiRes.options);
     std::thread writerThread1 = threadedWrite(trfFrame, lrWriter, "LR_writer");
@@ -702,6 +700,7 @@ namespace
             // Put frame in uninitialized state
             av_freep(&pFrame_);
             type = AVMediaType::AVMEDIA_TYPE_UNKNOWN;
+            assert( !this->operator bool() );
         }
         cv.notify_all();
     }
@@ -730,8 +729,9 @@ namespace
             }
             catch (std::exception& err)
             {
-                LOG4CXX_ERROR(logger, err.what() << "\nExiting reader thread.");
+                LOG4CXX_ERROR(logger, "Reader Error: " << err.what());
             }
+            LOG4CXX_DEBUG(logger, "Exiting reader thread.");
             tFrame.update(nullptr); //signal end
         });
     }
@@ -740,21 +740,26 @@ namespace
     {
         return std::thread([&frame, &writer, threadname](){
             log4cxx::MDC::put("threadname", threadname);
-            thread_local avtools::TimeType pts = -1;
+            thread_local avtools::TimeType ts = AV_NOPTS_VALUE;
             try
             {
-                while (frame)
+                while (true)
                 {
                     {
                         auto lock = frame.getReadLock();
-                        LOG4CXX_DEBUG(logger, "Received frame with pts: " << frame->best_effort_timestamp);
-                        if (frame->best_effort_timestamp <= pts)
+                        if (!frame)
                         {
-                            frame.cv.wait(lock, [&frame](){return frame->best_effort_timestamp > pts;});
+                            break;
                         }
-                        assert(frame->best_effort_timestamp > pts);
+                        LOG4CXX_DEBUG(logger, "Received frame with pts: " << frame->best_effort_timestamp);
+                        if (frame->best_effort_timestamp <= ts)
+                        {
+                            frame.cv.wait(lock, [&frame](){return frame->best_effort_timestamp > ts;});
+                        }
+                        assert(frame->best_effort_timestamp > ts);
+                        LOG4CXX_DEBUG(logger, "Writing frame with pts: " << frame->best_effort_timestamp);
                         writer.write(frame.get());
-                        pts = frame->best_effort_timestamp;
+                        ts = frame->best_effort_timestamp;
                     }
                 }
             }
@@ -782,12 +787,16 @@ namespace
             }
             try
             {
-                while (inFrame)
+                while (true)
                 {
                     {
+                        auto rLock = inFrame.getReadLock();
+                        if (!inFrame)
+                        {
+                            break;
+                        }
                         auto wLock = warpedFrame.getWriteLock();
                         assert(warpedFrame);
-                        auto rLock = inFrame.getReadLock();
                         if ( (inFrame->best_effort_timestamp > warpedFrame->best_effort_timestamp) || (warpedFrame->best_effort_timestamp == AV_NOPTS_VALUE) )
                         {
                             const cv::Mat inImg = getImage(inFrame);
@@ -801,8 +810,9 @@ namespace
             }
             catch (std::exception& err)
             {
-                LOG4CXX_ERROR(logger, err.what() << "\nExiting warper thread.");
+                LOG4CXX_ERROR(logger, "Warper error: " << err.what() );
             }
+            LOG4CXX_DEBUG(logger, "Exiting warper thread.");
             warpedFrame.update(nullptr);
         });
     }

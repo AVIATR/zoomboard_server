@@ -58,8 +58,7 @@ namespace
     struct Options
     {
         std::string url;                    ///< Url to open output stream
-        avtools::Dictionary streamOptions;  ///< stream options, such as frame rate, video size, pixel format
-        avtools::Dictionary codecOptions;   ///< codeco options
+        avtools::Dictionary options;        ///< stream & codec options, such as frame rate, video size, pixel format
     };
     
     /// Parses a json file to retrieve the configuration to use
@@ -209,8 +208,8 @@ int main(int argc, const char * argv[])
     // -----------
     // Open the reader and start the thread to read frames
     // -----------
-    LOG4CXX_DEBUG(logger, "Input options are:\n" << inOpts.streamOptions.as_string() << "\nOpening reader.");
-    avtools::MediaReader rdr(inOpts.url, inOpts.streamOptions, avtools::InputMediaType::CAPTURE_DEVICE);
+    LOG4CXX_DEBUG(logger, "Input options are:\n" << inOpts.options.as_string() << "\nOpening reader.");
+    avtools::MediaReader rdr(inOpts.url, inOpts.options, avtools::InputMediaType::CAPTURE_DEVICE);
     const AVStream* pVidStr = rdr.getVideoStream();
     ThreadsafeFrame inFrame(pVidStr->codecpar->width, pVidStr->codecpar->height, PIX_FMT);
     std::promise<void> exitSignal;
@@ -233,8 +232,8 @@ int main(int argc, const char * argv[])
     codecPar->codec_id = AVCodecID::AV_CODEC_ID_H264;
     LOG4CXX_DEBUG(logger, "Codec parameters " << codecPar.info());
 
-    avtools::MediaWriter lrWriter(outOptsLoRes.url, codecPar, pVidStr->time_base, outOptsLoRes.streamOptions, outOptsLoRes.codecOptions);
-//    avtools::MediaWriter hrWriter(outOptsHiRes.url, codecPar, pVidStr->time_base, outOptsHiRes.streamOptions, outOptsLoRes.codecOptions);
+    avtools::MediaWriter lrWriter(outOptsLoRes.url, codecPar, pVidStr->time_base, outOptsLoRes.options);
+    //    avtools::MediaWriter hrWriter(outOptsHiRes.url, codecPar, pVidStr->time_base, outOptsHiRes.options);
     std::thread writerThread1 = threadedWrite(trfFrame, lrWriter, "LR_writer");
 //    std::thread writerThread2 = threadedWrite(trfFrame, hrWriter, "HR_writer");
     const std::string OUTPUT_WINDOW = "Warped image";
@@ -295,7 +294,7 @@ namespace
     /// @param[out] opts options to read into
     void readFileNodeIntoOpts(const cv::FileNode& node, Options& opts)
     {
-        bool isUrlFound = false, isStreamOptsFound = false, isCodecOptsFound = false;
+        bool isUrlFound = false, isOptsFound = false;
         for (auto it = node.begin(); it != node.end(); ++it)
         {
             cv::FileNode n = *it;
@@ -308,23 +307,14 @@ namespace
                 }
                 isUrlFound = true;
             }
-            else if (n.name() == "stream_options")
+            else if (n.name() == "options")
             {
-                readFileNodeIntoDict(n, opts.streamOptions);
-                if (isStreamOptsFound)
+                readFileNodeIntoDict(n, opts.options);
+                if (isOptsFound)
                 {
-                    throw std::runtime_error("Multiple stream option entries in config file for " + node.name());
+                    throw std::runtime_error("Multiple option entries in config file for " + node.name());
                 }
-                isStreamOptsFound = true;
-            }
-            else if (n.name() == "codec_options")
-            {
-                readFileNodeIntoDict(n, opts.codecOptions);
-                if (isCodecOptsFound)
-                {
-                    throw std::runtime_error("Multiple codec option entries in config file for " + node.name());
-                }
-                isCodecOptsFound = true;
+                isOptsFound = true;
             }
             else
             {
@@ -335,13 +325,9 @@ namespace
         {
             throw std::runtime_error("URL not found in config file for " + node.name());
         }
-        if (!isStreamOptsFound) //note that this can be skipped for stream defaults
+        if (!isOptsFound) //note that this can be skipped for stream defaults
         {
             LOG4CXX_INFO(logger, "Stream options not found in config file for " << node.name());
-        }
-        if (!isCodecOptsFound) //note that this can be skipped for codec defaults
-        {
-            LOG4CXX_INFO(logger, "Codec options not found in config file for " << node.name());
         }
     }
 

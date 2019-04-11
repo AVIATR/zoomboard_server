@@ -4,7 +4,7 @@
         "avfoundation":
         {
             "url": "0",
-            "stream_options":
+            "options":
             {
                 "framerate": "30",
                 "video_size": "848x480",
@@ -14,7 +14,7 @@
         "v4l2":
         {
             "url": "/dev/video0",
-            "stream_options":
+            "options":
             {
                 "framerate": "30",
                 "video_size": "320x240",
@@ -26,30 +26,23 @@
     {
         "lores":
         {
-            "url": "stream_lr.m4v",
-            "stream_options":
+            "url": "stream_lr.flv",
+            "options":
             {
                 "framerate": "30",
-                "video_size": "384x216"
-            },
-            "codec_options":
-            {
-                "pixel_format": "yuv420p",
-                "profile": "main",
+                "video_size": "384x216",
+                "profile": "high422",
                 "preset": "ultrafast",
                 "tune": "zerolatency"
             }
         },
         "hires":
         {
-            "url": "stream_hr.m4v",
-            "stream_options":
+            "url": "stream_hr.flv",
+            "options":
             {
                 "framerate": "5",
-                "video_size": "848x480"
-            },
-            "codec_options":
-            {
+                "video_size": "848x480",
                 "pixel_format": "yuv420p",
                 "profile": "main",
                 "preset": "ultrafast",

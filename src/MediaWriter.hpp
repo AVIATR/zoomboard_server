@@ -41,35 +41,29 @@ namespace avtools
         /// @param[in] url stream URL
         /// @param[in] codecParam video codec parameters
         /// @param[in] timebase timebase for the video stream
-        /// @param[in] streamOpts a dictionary with optional stream parameters. After construction, the used entries are
+        /// @param[in] opts a dictionary with optional stream parameters. After construction, the used entries are
         /// consumed and only the unused entries remain
-        /// @param[in] codecOpts a dictionary with optional codec parameters. After construction, the used entries are consumed
-        /// and only the unused entries remain
         /// @throw StreamError if stream cannot be opened for writing
         [[deprecated]]
         MediaWriter(
             const std::string& url, 
             const AVCodecParameters& codecParam, 
             const TimeBaseType& timebase,
-            Dictionary& streamOpts,
-            Dictionary& codecOpts
+            Dictionary& opts
         );
 
         /// Ctor that opens a stream
         /// @param[in] url stream URL
         /// @param[in] codecParam video codec parameters
         /// @param[in] timebase timebase for the video stream
-        /// @param[in] streamOpts a dictionary with optional stream parameters. After construction, the used entries are
+        /// @param[in] opts a dictionary with optional stream parameters. After construction, the used entries are
         /// consumed and only the unused entries remain
-        /// @param[in] codecOpts a dictionary with optional codec parameters. After construction, the used entries are consumed
-        /// and only the unused entries remain
         /// @throw StreamError if stream cannot be opened for writing
         MediaWriter(
             const std::string& url,
             const CodecParameters& codecParam,
             const TimeBaseType& timebase,
-            Dictionary& streamOpts,
-            Dictionary& codecOpts
+            Dictionary& opts
         );
 
         ///Dtor

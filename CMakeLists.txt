@@ -81,10 +81,11 @@ message("\nProject = ${PROJECT_NAME}")
 message(STATUS "Build type = ${CMAKE_BUILD_TYPE}")
 message(STATUS "SOURCE DIR = ${PROJECT_SOURCE_DIR}")
 message(STATUS "BINARY DIR = ${PROJECT_BINARY_DIR}")
-message(STATUS "Target folder = $<TARGET_FILE:${PROJ_NAME}>")
 #Add source folder
 add_subdirectory("src")
-configure_file("config.json" $<TARGET_FILE:${PROJ_NAME}> COPYONLY)
+set(TGT_FOLDER $<TARGET_FILE_DIR:${PROJECT_NAME}>)
+message(STATUS "Target folder = ${TGT_FOLDER}")
+configure_file("config.json" ${TGT_FOLDER} COPYONLY)
 
 # CPack packaging
 include(InstallRequiredSystemLibraries)

@@ -12,9 +12,7 @@
 #include <vector>
 #include <thread>
 #include <mutex>
-#include <shared_mutex>
-#include <condition_variable>
-#include <future>
+//#include <future>
 #include <sys/stat.h>
 #include <log4cxx/logger.h>
 #include <log4cxx/basicconfigurator.h>
@@ -27,13 +25,14 @@ extern "C" {
 #include <libavcodec/avcodec.h>
 #include <libswscale/swscale.h>
 #include <libswresample/swresample.h>
-#include <libavutil/opt.h>
+//#include <libavutil/opt.h>
 #include <libavutil/avutil.h>
 }
 #include "version.h"
 #include "MediaReader.hpp"
 #include "MediaWriter.hpp"
 #include "Media.hpp"
+#include "ThreadsafeFrame.hpp"
 
 using avtools::MediaError;
 namespace
@@ -50,7 +49,6 @@ namespace
 
     // Initialize logger
     log4cxx::LoggerPtr logger(log4cxx::Logger::getLogger("zoombrd"));
-    static std::exception_ptr errPtr = nullptr;
     static const AVPixelFormat PIX_FMT = AVPixelFormat::AV_PIX_FMT_BGR24;
 
     /// @class A structure containing the pertinent ffmpeg options
@@ -60,7 +58,31 @@ namespace
         std::string url;                    ///< Url to open output stream
         avtools::Dictionary options;        ///< stream & codec options, such as frame rate, video size, pixel format
     };
-    
+
+    class ProgramStatus
+    {
+    private:
+        mutable std::mutex mutex_;
+        std::atomic_bool doEnd_;
+        std::vector<std::exception_ptr> exceptions_;
+    public:
+        /// Ctor
+        ProgramStatus();
+        /// Dtor
+        ~ProgramStatus();
+        /// Used to signal the program to end.
+        void end();
+        /// True if the program has been signaled to end
+        bool isEnded() const;
+        /// Used to log an exception from a thread. This also signals program end
+        /// @param[in] an exception pointer. This will be stored and later logged at program end
+        void addException(std::exception_ptr errPtr);
+        /// @return true if there are logged exceptions
+        bool hasExceptions() const;
+        /// Logs all the exceptions. Once logged, all exceptions are cleared.
+        void logExceptions();
+    };  //::<anon>::ProgramStatus
+
     /// Parses a json file to retrieve the configuration to use
     /// @param[in] configFile name of configuration file to read
     /// @param[out] inputOptions a structure containing the input options to use
@@ -74,82 +96,18 @@ namespace
         Options& outputOptionsHiRes
     );
 
-    /// @class Thread-safe frame wrapper
-    /// See https://stackoverflow.com/questions/39516416/using-weak-ptr-to-implement-the-observer-pattern
-    /// This frame employes a single writer/multiple reader paradigm
-    /// Only one thread can write at a time, using update()
-    /// Multiple threads can read at the same time, accessing the underlying frame via get()
-    /// Threads subscribe to this frame via subscribe(). When a new frame is available (After an update()),
-    /// all subscribers are called with notify() to give them access to the underlying frame.
-    /// Also see https://en.cppreference.com/w/cpp/thread/shared_mutex for single writer/multiple reader example
-    class ThreadsafeFrame: public avtools::Frame, std::enable_shared_from_this<ThreadsafeFrame>
-    {
-    private:
-        SwsContext* pConvCtx_;                                              ///< Image conversion context used if the update images are different than the declared frame dimensions or format
-
-        /// Ctor
-        /// @param[in] width width of the frame
-        /// @param[in] height of the frame
-        /// @param[in] format frame format
-        ThreadsafeFrame(int width, int height, AVPixelFormat format);
-        mutable std::shared_timed_mutex mutex;                              ///< Mutex used for single writer/multiple reader access TODO: Update to c++17 and std::shared_mutex
-    public:
-        typedef std::shared_lock<std::shared_timed_mutex> read_lock_t;      ///< Read lock type, allows for multi-threaded read
-        typedef std::unique_lock<std::shared_timed_mutex> write_lock_t;     ///< Write lock type, only one thread can write
-
-        mutable std::condition_variable_any cv;                             ///< Condition variable to let observers know when a new frame has arrived
-        /// Dtor
-        virtual ~ThreadsafeFrame();
-        /// Updates the frame in a thread-safe manner
-        /// @param[in] frame new frame that will replace the existing frame
-        void update(const avtools::Frame& frame);
-
-        /// @return a read lock, blocks until it is acquired
-        inline read_lock_t getReadLock() const { return read_lock_t(mutex); }
-        /// @return an attempted read lock. The receiver must test to see if the returned lock is acquired
-        inline read_lock_t tryReadLock() const { return read_lock_t(mutex, std::try_to_lock); }
-        /// @return a write lock, blocks until it is acquired
-        inline write_lock_t getWriteLock() { return write_lock_t(mutex); }
-        /// @return an attempted write lock. The receiver must test to see if the returned lock is acquired
-        inline write_lock_t tryWriteLock() { return write_lock_t(mutex, std::try_to_lock); }
-
-        /// Factory method
-        /// @param[in] width width of the frame
-        /// @param[in] height of the frame
-        /// @param[in] format frame format
-        /// @return a shared pointer to an instance of ThreadsafeFrame
-        inline static std::shared_ptr<ThreadsafeFrame> Get(int width, int height, AVPixelFormat fmt)
-        {
-            return std::shared_ptr<ThreadsafeFrame>(new ThreadsafeFrame(width, height, fmt));
-        }
-
-        /// @return a shared pointer to this object
-        inline std::shared_ptr<ThreadsafeFrame> getPtr()
-        {
-            return shared_from_this();
-        }
-
-        /// @return a shared pointer to this object
-        inline std::shared_ptr<const ThreadsafeFrame> getPtr() const
-        {
-            return shared_from_this();
-        }
-    }; //::<anon>::ThreadsafeFrame
-
-
     /// Function that starts a stream reader that reads from a stream int to a threaded frame
     /// @param[in,out] pFrame threadsafe frame to write to
     /// @param[in] rdr an opened media reader
-    /// @param[in] futureObj future object that signals the reader to stop
     /// @return a new thread that reads frames from the input stream and updates the threaded frame
-    std::thread threadedRead(std::weak_ptr<ThreadsafeFrame> pFrame, avtools::MediaReader& rdr, std::future<void> futureObj);
+    std::thread threadedRead(std::weak_ptr<avtools::ThreadsafeFrame> pFrame, avtools::MediaReader& rdr);
 
     /// Function that starts a stream writer that writes to a stream from a threaded frame
     /// @param[in] pFrame threadsafe frame to read from
     /// @param[in] writer media writer instance
     /// @param[in] threadname name of writer thread (for debugging purposes)
     /// @return a new thread that reads frames from the input frame and writes to an output file
-    std::thread threadedWrite(std::weak_ptr<const ThreadsafeFrame> pFrame, avtools::MediaWriter& writer, const std::string& threadname="writer");
+    std::thread threadedWrite(std::weak_ptr<const avtools::ThreadsafeFrame> pFrame, avtools::MediaWriter& writer, const std::string& threadname="writer");
 
     /// Asks the user to choose the corners of the board and undoes the
     /// perspective transform. This can then be used with
@@ -158,14 +116,14 @@ namespace
     /// @param[in] pFrame input frame that will be updated by the reader thread
     /// @return a perspective transformation matrix
     /// TODO: Should also return the roi so we send a smaller framesize if need be (no need to send extra data)
-    cv::Mat_<double> getPerspectiveTransformationMatrix(std::weak_ptr<const ThreadsafeFrame> pFrame);
+    cv::Mat_<double> getPerspectiveTransformationMatrix(std::weak_ptr<const avtools::ThreadsafeFrame> pFrame);
 
     /// Launches a thread that creates a warped matrix of the input frame according to the given transform matrix
     /// @param[in] pInFrame input frame
     /// @param[in, out] pWarpedFrame transformed output frame
     /// @param[in] trfMatrix transform matrix
     /// @return a new thread that runs in the background, updates the warpedFrame when a new inFrame is available.
-    std::thread threadedWarp(std::weak_ptr<const ThreadsafeFrame> pInFrame, std::weak_ptr<ThreadsafeFrame> pWarpedFrame, const cv::Mat& trfMatrix);
+    std::thread threadedWarp(std::weak_ptr<const avtools::ThreadsafeFrame> pInFrame, std::weak_ptr<avtools::ThreadsafeFrame> pWarpedFrame, const cv::Mat& trfMatrix);
 
     /// Wraps a cv::mat around libav frames. Note that the matrix is just wrapped around the
     /// existing data, so data is not cloned. Make sure that the matrix is done being used before reading new
@@ -187,20 +145,8 @@ namespace
         return cv::Mat(frame->height, frame->width, CV_8UC3, frame->data[0], frame->linesize[0]);
     }
 
-    /// recursively print exception whats:
-    /// @param[in] An exception. If there are nested exceptions, they are also logged.
-    void logExceptions(const std::exception& e)
-    {
-        LOG4CXX_ERROR(logger, e.what() << ":");
-        try
-        {
-            std::rethrow_if_nested(e);
-        }
-        catch (const std::exception& nested)
-        {
-            logExceptions(nested);
-        }
-    }
+    /// Maintains communication between threads re: exceptions & program end
+    static ProgramStatus g_Status;
 } //::<anon>
 
 // The command we are trying to implement for one output stream is
@@ -253,25 +199,27 @@ int main(int argc, const char * argv[])
     {
         std::throw_with_nested("Unable to parse command line options" + USAGE);
     }
+
     // -----------
     // Open the reader and start the thread to read frames
     // -----------
     LOG4CXX_DEBUG(logger, "Input options are:\n" << inOpts.options.as_string() << "\nOpening reader.");
     avtools::MediaReader rdr(inOpts.url, inOpts.options, avtools::InputMediaType::CAPTURE_DEVICE);
     const AVStream* pVidStr = rdr.getVideoStream();
-    auto pInFrame = ThreadsafeFrame::Get(pVidStr->codecpar->width, pVidStr->codecpar->height, PIX_FMT);
-    std::promise<void> exitSignal;
-    std::thread readerThread = threadedRead(pInFrame, rdr, exitSignal.get_future());
+    auto pInFrame = avtools::ThreadsafeFrame::Get(pVidStr->codecpar->width, pVidStr->codecpar->height, PIX_FMT);
+    std::thread readerThread = threadedRead(pInFrame, rdr);
+
     // -----------
-    // Add transformer
+    // Add perspective transformer
     // -----------
     LOG4CXX_DEBUG(logger, "Opening transformer");
-    auto pTrfFrame = ThreadsafeFrame::Get(pVidStr->codecpar->width, pVidStr->codecpar->height, PIX_FMT);
+    auto pTrfFrame = avtools::ThreadsafeFrame::Get(pVidStr->codecpar->width, pVidStr->codecpar->height, PIX_FMT);
     assert( (AV_NOPTS_VALUE == (*pTrfFrame)->best_effort_timestamp) && (AV_NOPTS_VALUE == (*pTrfFrame)->pts) );
     // Get corners of the board
     cv::Mat trfMatrix = getPerspectiveTransformationMatrix(pInFrame);
     // Start the warper thread
     std::thread warperThread = threadedWarp(pInFrame, pTrfFrame, trfMatrix);
+
     // -----------
     // Open the output stream writers - one for lo-res, one for hi-res
     // -----------
@@ -285,7 +233,7 @@ int main(int argc, const char * argv[])
     // display the image and continue until someone hits a key
     const std::string OUTPUT_WINDOW = "Warped image";
     cv::namedWindow(OUTPUT_WINDOW);
-    while (!errPtr && cv::waitKey(50) < 0)
+    while (!g_Status.isEnded() && cv::waitKey(50) < 0)
     {
         {
             auto lock = pTrfFrame->getReadLock();
@@ -296,11 +244,9 @@ int main(int argc, const char * argv[])
     // -----------
     // Cleanup
     // -----------
-    exitSignal.set_value(); //signal exit to reader
+    assert(g_Status.isEnded());
     readerThread.join();    //wait for reader thread to finish
-    pInFrame.reset();       //reset input frame
     warperThread.join();    //wait for warper frame to finish
-    pTrfFrame.reset();      //reset warped frame
     writerThread1.join();   //wait for writer frame to finish
 //    writerThread2.join();
     LOG4CXX_DEBUG(logger, "Exiting successfully...");
@@ -429,6 +375,76 @@ namespace
         fs.release();
     }
 
+    // ---------------------------
+    // Program Status Definitions
+    // ---------------------------
+
+    /// recursively print exception whats:
+    /// @param[in] An exception. If there are nested exceptions, they are also logged.
+    void logNestedExceptions(std::exception& e)
+    {
+        LOG4CXX_ERROR(logger, e.what() << ":");
+        try
+        {
+            std::rethrow_if_nested(e);
+        }
+        catch (std::exception& nested)
+        {
+            logNestedExceptions(nested);
+        }
+    }
+
+    ProgramStatus::ProgramStatus():
+    mutex_(),
+    doEnd_(false),
+    exceptions_()
+    {}
+
+    ProgramStatus::~ProgramStatus()
+    {
+        logExceptions();
+    }
+
+    void ProgramStatus::end()
+    {
+        doEnd_.store(true);
+    }
+
+    bool ProgramStatus::isEnded() const
+    {
+        return doEnd_.load();
+    }
+
+    void ProgramStatus::addException(std::exception_ptr errPtr)
+    {
+        std::lock_guard<std::mutex> lk(mutex_);
+        exceptions_.push_back(errPtr);
+    }
+
+    bool ProgramStatus::hasExceptions() const
+    {
+        std::lock_guard<std::mutex> lk(mutex_);
+        return !exceptions_.empty();
+    }
+
+    void ProgramStatus::logExceptions()
+    {
+        std::lock_guard<std::mutex> lk(mutex_);
+        for (auto const& e : exceptions_)
+        {
+            try
+            {
+                std::rethrow_exception(e);
+            }
+            catch (std::exception& err)
+            {
+                logNestedExceptions(err);
+            }
+        }
+        exceptions_.clear();
+    }
+
+
 
     // ---------------------------
     // Transformer Definitions
@@ -556,7 +572,7 @@ namespace
         }
     }
 
-    cv::Mat_<double> getPerspectiveTransformationMatrix(std::weak_ptr<const ThreadsafeFrame> pFrame)
+    cv::Mat_<double> getPerspectiveTransformationMatrix(std::weak_ptr<const avtools::ThreadsafeFrame> pFrame)
     {
         static const cv::Scalar FIXED_COLOR = cv::Scalar(0,0,255), DRAGGED_COLOR = cv::Scalar(255, 0, 0);
         static const std::string INPUT_WINDOW_NAME = "Input", OUTPUT_WINDOW_NAME = "Warped";
@@ -667,76 +683,20 @@ namespace
         return trfMatrix;
     }
 
-    // ---------------------------
-    // Threadsafe Frame Definitions
-    // ---------------------------
-    ThreadsafeFrame::ThreadsafeFrame(int width, int height, AVPixelFormat format):
-    Frame(width, height, format),
-    pConvCtx_(nullptr),
-    mutex(),
-    cv()
-    {
-    }
-
-    ThreadsafeFrame::~ThreadsafeFrame()
-    {
-        if (pConvCtx_)
-        {
-            sws_freeContext(pConvCtx_);
-        }
-    };
-
-    void ThreadsafeFrame::update(const avtools::Frame &frm)
-    {
-        assert(pFrame_);
-        if (frm)
-        {
-            LOG4CXX_DEBUG(logger, "Updating threadsafe frame with " << frm.info(1));
-            {
-                auto lock = getWriteLock();
-                assert(frm->data[0] && pFrame_->data[0]);
-                if ( (pFrame_->width != frm->width) || (pFrame_->height != frm->height) || (pFrame_->format != frm->format) )
-                {
-                    LOG4CXX_DEBUG(logger, "Converting frame...");
-                    pConvCtx_ = sws_getCachedContext(pConvCtx_, frm->width, frm->height, (AVPixelFormat) frm->format, pFrame_->width, pFrame_->height, (AVPixelFormat) pFrame_->format, SWS_LANCZOS | SWS_ACCURATE_RND, nullptr, nullptr, nullptr);
-                    int ret = sws_scale(pConvCtx_, frm->data, frm->linesize, 0, frm->height, pFrame_->data, pFrame_->linesize);
-                    if (ret < 0)
-                    {
-                        throw avtools::MediaError("Error converting frame to output format.", ret);
-                    }
-                }
-                else
-                {
-                    av_frame_copy(pFrame_, frm.get());
-                }
-
-                av_frame_copy_props(pFrame_, frm.get());
-                LOG4CXX_DEBUG(logger, "Updated frame info: " << info(1));
-            }
-        }
-        else
-        {
-            // Put frame in uninitialized state
-            av_freep(&pFrame_);
-            type = AVMediaType::AVMEDIA_TYPE_UNKNOWN;
-            assert( !this->operator bool() );
-        }
-        cv.notify_all();
-    }
-
     // -------------------------
     // Threaded reader & writer functions
     // -------------------------
-    std::thread threadedRead(std::weak_ptr<ThreadsafeFrame> pFrame, avtools::MediaReader& rdr, std::future<void> futureObj)
+    std::thread threadedRead(std::weak_ptr<avtools::ThreadsafeFrame> pFrame, avtools::MediaReader& rdr)
     {
-        return std::thread([pFrame{std::move(pFrame)}, &rdr, futureObj{std::move(futureObj)}](){
+        return std::thread([pFrame, &rdr](){
             try
             {
                 log4cxx::MDC::put("threadname", "reader");
                 avtools::Frame frame(*rdr.getVideoStream()->codecpar);
-                while (const AVStream* pS = rdr.read(frame))
+                while (!g_Status.isEnded())
                 {
-                    if (futureObj.wait_for(std::chrono::milliseconds(1)) != std::future_status::timeout)
+                    const AVStream* pS = rdr.read(frame);
+                    if (!pS)
                     {
                         break;
                     }
@@ -753,74 +713,109 @@ namespace
             }
             catch (std::exception& err)
             {
-                LOG4CXX_ERROR(logger, "Reader Error: " << err.what());
+                LOG4CXX_DEBUG(logger, "Caught exception in reader thread" << err.what());
+                try
+                {
+                    std::throw_with_nested( std::runtime_error("Reader thread error") );
+                }
+                catch (...)
+                {
+                    g_Status.addException(std::current_exception());
+                    g_Status.end();
+                }
             }
             LOG4CXX_DEBUG(logger, "Exiting reader thread.");
         });
     }
 
-    std::thread threadedWrite(std::weak_ptr<const ThreadsafeFrame> pFrame, avtools::MediaWriter& writer, const std::string& threadname/*="writer"*/)
+    std::thread threadedWrite(std::weak_ptr<const avtools::ThreadsafeFrame> pFrame, avtools::MediaWriter& writer, const std::string& threadname/*="writer"*/)
     {
-        return std::thread([pFrame{std::move(pFrame)}, &writer, threadname](){
+        return std::thread([pFrame, &writer, threadname](){
             log4cxx::MDC::put("threadname", threadname);
             thread_local avtools::TimeType ts = AV_NOPTS_VALUE;
             try
             {
-                while (auto ppFrame = pFrame.lock())
+                while (!g_Status.isEnded())
                 {
+                    auto ppFrame = pFrame.lock();
+                    if (!ppFrame)
+                    {
+                        break;
+                    }
+                    const auto& inFrame = *ppFrame;
                     {
                         auto lock = ppFrame->getReadLock();
-                        LOG4CXX_DEBUG(logger, "Received frame with pts: " << (*ppFrame)->best_effort_timestamp);
-                        if ((*ppFrame)->best_effort_timestamp <= ts)
+                        LOG4CXX_DEBUG(logger, "Received frame with pts: " << inFrame->best_effort_timestamp);
+                        if (inFrame->best_effort_timestamp <= ts)
                         {
-                            ppFrame->cv.wait(lock, [&ppFrame](){return (*ppFrame)->best_effort_timestamp > ts;});
+                            ppFrame->cv.wait(lock, [&inFrame](){return inFrame->best_effort_timestamp > ts;});
                         }
-                        LOG4CXX_DEBUG(logger, "Writing frame with pts: " << (*ppFrame)->best_effort_timestamp);
-                        writer.write(ppFrame->get());
-                        ts = (*ppFrame)->best_effort_timestamp;
+                        LOG4CXX_DEBUG(logger, "Writing frame with pts: " << inFrame->best_effort_timestamp);
+                        writer.write(inFrame.get());
+                        ts = inFrame->best_effort_timestamp;
                     }
                 }
             }
             catch (std::exception& err)
             {
-                LOG4CXX_ERROR(logger, err.what());
+                LOG4CXX_DEBUG(logger, "Caught exception in thread:" << threadname << ":" << err.what());
+                try
+                {
+                    std::throw_with_nested( std::runtime_error(threadname + " thread error") );
+                }
+                catch (...)
+                {
+                    g_Status.addException(std::current_exception());
+                    g_Status.end();
+                }
             }
             //Cleanup writer
             LOG4CXX_DEBUG(logger, "Closing writer and exiting writer thread.");
         });
     }
 
-    std::thread threadedWarp(std::weak_ptr<const ThreadsafeFrame> pInFrame, std::weak_ptr<ThreadsafeFrame> pWarpedFrame, const cv::Mat& trfMatrix)
+    std::thread threadedWarp(std::weak_ptr<const avtools::ThreadsafeFrame> pInFrame, std::weak_ptr<avtools::ThreadsafeFrame> pWarpedFrame, const cv::Mat& trfMatrix)
     {
-        return std::thread([pInFrame{std::move(pInFrame)}, pWarpedFrame{std::move(pWarpedFrame)}, trfMatrix](){
+        return std::thread([pInFrame, pWarpedFrame, trfMatrix](){
             log4cxx::MDC::put("threadname", "warper");
-            std::unique_ptr<avtools::ImageConversionContext> hCtx = nullptr;
             try
             {
-                while (auto ppInFrame = pInFrame.lock())
+                while (!g_Status.isEnded())
                 {
+                    auto ppInFrame = pInFrame.lock();
                     auto ppWarpedFrame = pWarpedFrame.lock();
-                    if (!ppWarpedFrame)
+                    if (!ppWarpedFrame || !ppInFrame)
                     {
                         break;
                     }
+                    const auto& inFrame = *ppInFrame;
+                    auto& warpedFrame = *ppWarpedFrame;
                     {
-                        auto rLock = ppInFrame->getReadLock();
-                        auto wLock = ppWarpedFrame->getWriteLock();
-                        if ( ( (*ppInFrame)->best_effort_timestamp > (*ppWarpedFrame)->best_effort_timestamp ) || ((*ppWarpedFrame)->best_effort_timestamp == AV_NOPTS_VALUE) )
+                        auto rLock = inFrame.getReadLock();
+                        auto wLock = warpedFrame.getWriteLock();
+                        if ( ( inFrame->best_effort_timestamp > warpedFrame->best_effort_timestamp ) || (warpedFrame->best_effort_timestamp == AV_NOPTS_VALUE) )
                         {
-                            const cv::Mat inImg = getImage(*ppInFrame);
-                            cv::Mat outImg = getImage(*ppWarpedFrame);
+                            const cv::Mat inImg = getImage(inFrame);
+                            cv::Mat outImg = getImage(warpedFrame);
                             cv::warpPerspective(inImg, outImg, trfMatrix, inImg.size(), cv::InterpolationFlags::INTER_LANCZOS4);
-                            av_frame_copy_props(ppWarpedFrame->get(), ppInFrame->get());
-                            LOG4CXX_DEBUG(logger, "Warped frame info: " << ppWarpedFrame->info(1));
+                            av_frame_copy_props(warpedFrame.get(), inFrame.get());
+                            LOG4CXX_DEBUG(logger, "Warped frame info: " << warpedFrame.info(1));
                         }
                     }
                 }
             }
             catch (std::exception& err)
             {
-                LOG4CXX_ERROR(logger, "Warper error: " << err.what() );
+                LOG4CXX_DEBUG(logger, "Caught exception in warper thread" << err.what());
+                try
+                {
+                    std::throw_with_nested( std::runtime_error("Warper thread error") );
+                }
+                catch (...)
+                {
+                    g_Status.addException(std::current_exception());
+                    g_Status.end();
+                }
             }
             LOG4CXX_DEBUG(logger, "Exiting warper thread.");
         });

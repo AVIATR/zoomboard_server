@@ -76,6 +76,10 @@ namespace avtools
         /// @param[in] pFrame frame data to write
         void write( const AVFrame* pFrame);
 
+        /// Writes a video frame to the stream. Write nullptr to close the stream
+        /// @param[in] pFrame frame data to write
+        void write( const Frame& frame);
+
     private:
         class Implementation;                       ///< implementation class
         std::unique_ptr<Implementation> pImpl_;     ///< ptr to implementation

@@ -9,7 +9,6 @@
 #include "Media.hpp"
 #include "log4cxx/logger.h"
 extern "C" {
-//#include <libavcodec/avcodec.h>
 #include <libswscale/swscale.h>
 #include <libavutil/avutil.h>
 }
@@ -45,7 +44,7 @@ namespace avtools
         assert(pFrame_);
         if (frm)
         {
-            LOG4CXX_DEBUG(logger, "Updating threadsafe frame with " << frm.info(1));
+            LOG4CXX_DEBUG(logger, "Updating threadsafe frame with \n" << frm.info(1));
             {
                 auto lock = getWriteLock();
                 assert(frm->data[0] && pFrame_->data[0]);
@@ -65,7 +64,7 @@ namespace avtools
                 }
 
                 av_frame_copy_props(pFrame_, frm.get());
-                LOG4CXX_DEBUG(logger, "Updated frame info: " << info(1));
+                LOG4CXX_DEBUG(logger, "Updated frame info: \n" << info(1));
             }
         }
         else

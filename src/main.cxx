@@ -62,9 +62,9 @@ namespace
     class ProgramStatus
     {
     private:
-        mutable std::mutex mutex_;
-        std::atomic_bool doEnd_;
-        std::vector<std::exception_ptr> exceptions_;
+        mutable std::mutex mutex_;                      ///< mutex to use when adding exceptions
+        std::atomic_bool doEnd_;                        ///< set to true to signal program should end
+        std::vector<std::exception_ptr> exceptions_;    ///< list of stored exceptions
     public:
         /// Ctor
         ProgramStatus();
@@ -227,17 +227,23 @@ int main(int argc, const char * argv[])
     codecPar->codec_id = AVCodecID::AV_CODEC_ID_H264;
     avtools::MediaWriter lrWriter(outOptsLoRes.url, codecPar, pVidStr->time_base, outOptsLoRes.options);
     //    avtools::MediaWriter hrWriter(outOptsHiRes.url, codecPar, pVidStr->time_base, outOptsHiRes.options);
-    std::thread writerThread1 = threadedWrite(pTrfFrame, lrWriter, "LR_writer");
+//    std::thread writerThread1 = threadedWrite(pTrfFrame, lrWriter, "LR_writer");
 //    std::thread writerThread2 = threadedWrite(trfFrame, hrWriter, "HR_writer");
 
     // display the image and continue until someone hits a key
     const std::string OUTPUT_WINDOW = "Warped image";
     cv::namedWindow(OUTPUT_WINDOW);
-    while (!g_Status.isEnded() && cv::waitKey(50) < 0)
+    while ( !g_Status.isEnded() )
     {
         {
             auto lock = pTrfFrame->getReadLock();
             cv::imshow(OUTPUT_WINDOW, getImage(*pTrfFrame));
+        }
+        if (cv::waitKey(20) >= 0)
+        {
+            LOG4CXX_DEBUG(logger, "Received key press");
+            g_Status.end();
+            cv::destroyWindow(OUTPUT_WINDOW);
         }
     }
 
@@ -247,8 +253,13 @@ int main(int argc, const char * argv[])
     assert(g_Status.isEnded());
     readerThread.join();    //wait for reader thread to finish
     warperThread.join();    //wait for warper frame to finish
-    writerThread1.join();   //wait for writer frame to finish
+//    writerThread1.join();   //wait for writer frame to finish
 //    writerThread2.join();
+    if (g_Status.hasExceptions())
+    {
+        g_Status.logExceptions();
+        return EXIT_FAILURE;
+    }
     LOG4CXX_DEBUG(logger, "Exiting successfully...");
     return EXIT_SUCCESS;
 }
@@ -724,7 +735,7 @@ namespace
                     g_Status.end();
                 }
             }
-            LOG4CXX_DEBUG(logger, "Exiting reader thread.");
+            LOG4CXX_DEBUG(logger, "Exiting reader thread: isEnded=" << std::boolalpha << g_Status.isEnded());
         });
     }
 
@@ -732,26 +743,60 @@ namespace
     {
         return std::thread([pFrame, &writer, threadname](){
             log4cxx::MDC::put("threadname", threadname);
-            thread_local avtools::TimeType ts = AV_NOPTS_VALUE;
+            avtools::TimeType ts = AV_NOPTS_VALUE;
+            std::unique_ptr<avtools::ImageConversionContext> hConvCtx = nullptr;
+            avtools::Frame convFrame;
+            //Initialization
             try
             {
+                {
+                    auto ppFrame = pFrame.lock();
+                    if (!ppFrame)
+                    {
+                        LOG4CXX_ERROR(logger, "Received null frame, closing without writing.");
+                        return;
+                    }
+                    const auto& frame = *ppFrame;
+                    const auto pCPar = writer.getStream()->codecpar;
+                    auto lock = frame.getReadLock();
+                    if ( (frame->width != pCPar->width) || (frame->height != pCPar->height) || (frame->format != pCPar->format))
+                    {
+                        hConvCtx = std::make_unique<avtools::ImageConversionContext>(frame->width, frame->height, (AVPixelFormat) frame->format, pCPar->width, pCPar->height, (AVPixelFormat) pCPar->format );
+                        if (!hConvCtx)
+                        {
+                            throw std::runtime_error("Unable to allocate conversion context for writer.");
+                        }
+                        convFrame = avtools::Frame(pCPar->width, pCPar->height, (AVPixelFormat) pCPar->format);
+                    }
+                }
                 while (!g_Status.isEnded())
                 {
                     auto ppFrame = pFrame.lock();
                     if (!ppFrame)
                     {
+                        LOG4CXX_DEBUG(logger, "Received null frame");
                         break;
                     }
                     const auto& inFrame = *ppFrame;
                     {
-                        auto lock = ppFrame->getReadLock();
+                        auto lock = inFrame.getReadLock();
                         LOG4CXX_DEBUG(logger, "Received frame with pts: " << inFrame->best_effort_timestamp);
                         if (inFrame->best_effort_timestamp <= ts)
                         {
-                            ppFrame->cv.wait(lock, [&inFrame](){return inFrame->best_effort_timestamp > ts;});
+                            ppFrame->cv.wait(lock, [&inFrame, ts](){return inFrame->best_effort_timestamp > ts;});
                         }
-                        LOG4CXX_DEBUG(logger, "Writing frame with pts: " << inFrame->best_effort_timestamp);
-                        writer.write(inFrame.get());
+                        if (hConvCtx)
+                        {
+                            hConvCtx->convert(inFrame, convFrame);
+                            av_frame_copy_props(convFrame.get(), inFrame.get());
+                            LOG4CXX_DEBUG(logger, "Writing frame: \n" << convFrame.info(1));
+                            writer.write(convFrame.get());
+                        }
+                        else
+                        {
+                            LOG4CXX_DEBUG(logger, "Writing frame: \n" << inFrame.info(1));
+                            writer.write(inFrame.get());
+                        }
                         ts = inFrame->best_effort_timestamp;
                     }
                 }
@@ -780,27 +825,35 @@ namespace
             log4cxx::MDC::put("threadname", "warper");
             try
             {
+                avtools::TimeType ts = AV_NOPTS_VALUE;
                 while (!g_Status.isEnded())
                 {
                     auto ppInFrame = pInFrame.lock();
-                    auto ppWarpedFrame = pWarpedFrame.lock();
-                    if (!ppWarpedFrame || !ppInFrame)
+                    if (!ppInFrame)
                     {
+                        LOG4CXX_DEBUG(logger, "Received null frame");
                         break;
                     }
                     const auto& inFrame = *ppInFrame;
-                    auto& warpedFrame = *ppWarpedFrame;
                     {
                         auto rLock = inFrame.getReadLock();
-                        auto wLock = warpedFrame.getWriteLock();
-                        if ( ( inFrame->best_effort_timestamp > warpedFrame->best_effort_timestamp ) || (warpedFrame->best_effort_timestamp == AV_NOPTS_VALUE) )
+                        if (inFrame->best_effort_timestamp <= ts)
                         {
-                            const cv::Mat inImg = getImage(inFrame);
-                            cv::Mat outImg = getImage(warpedFrame);
-                            cv::warpPerspective(inImg, outImg, trfMatrix, inImg.size(), cv::InterpolationFlags::INTER_LANCZOS4);
-                            av_frame_copy_props(warpedFrame.get(), inFrame.get());
-                            LOG4CXX_DEBUG(logger, "Warped frame info: " << warpedFrame.info(1));
+                            inFrame.cv.wait(rLock, [&inFrame, ts](){return inFrame->best_effort_timestamp > ts;});    //wait until fresh frame is available
                         }
+                        auto ppWarpedFrame = pWarpedFrame.lock();
+                        if (!ppWarpedFrame )
+                        {
+                            LOG4CXX_DEBUG(logger, "Output frame is null");
+                            break;
+                        }
+                        auto& warpedFrame = *ppWarpedFrame;
+                        auto wLock = warpedFrame.getWriteLock();
+                        cv::Mat inImg = getImage(inFrame);
+                        cv::Mat outImg = getImage(warpedFrame);
+                        cv::warpPerspective(inImg, outImg, trfMatrix, inImg.size(), cv::InterpolationFlags::INTER_LANCZOS4);
+                        av_frame_copy_props(warpedFrame.get(), inFrame.get());
+                        LOG4CXX_DEBUG(logger, "Warped frame info: \n" << warpedFrame.info(1));
                     }
                 }
             }
@@ -817,7 +870,7 @@ namespace
                     g_Status.end();
                 }
             }
-            LOG4CXX_DEBUG(logger, "Exiting warper thread.");
+            LOG4CXX_DEBUG(logger, "Exiting warper thread: isEnded=" << std::boolalpha << g_Status.isEnded());
         });
     }
 

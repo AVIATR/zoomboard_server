@@ -357,6 +357,7 @@ namespace avtools
         {
             assert( formatCtx_ );
             // send frame to encoder
+            assert( (pFrame->width == codecCtx_->width) && (pFrame->height == codecCtx_->height) && (pFrame->format == codecCtx_->pix_fmt) );
             int ret = avcodec_send_frame(codecCtx_.get(), pFrame);
             if (ret < 0)
             {
@@ -471,7 +472,12 @@ namespace avtools
         }
         catch (std::exception& e)
         {
-            std::throw_with_nested(MediaError("MediaWriter: Error writing to video stream "));
+            std::throw_with_nested(MediaError("MediaWriter: Error writing to video stream"));
         }
     }
-}   //::ski
+
+    void MediaWriter::write(const Frame &frame)
+    {
+        write(frame.get());
+    }
+}   //::avtools

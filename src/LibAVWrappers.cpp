@@ -37,6 +37,12 @@ namespace
         ss << filler << "Timestamp:" << pFrame->best_effort_timestamp << std::endl;
         ss << filler << "Picture Format: " << (AVPixelFormat) pFrame->format << std::endl;;
         ss << filler << "Size (w x h): " << pFrame->width << "x" << pFrame->height << std::endl;
+        ss << filler << "Stride: ";
+        for (int i = 0; (i < AV_NUM_DATA_POINTERS) && (pFrame->linesize[i]); ++i)
+        {
+            ss << pFrame->linesize[i] << " ";
+        }
+        ss << std::endl;
         ss << filler << "Picture Type:" << pFrame->pict_type << std::endl;
 #ifndef NDEBUG
         ss << filler << "Data allocated at " << static_cast<void*>(pFrame->data[0]) << std::endl;

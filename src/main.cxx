@@ -213,11 +213,11 @@ int main(int argc, const char * argv[])
     // Add perspective transformer
     // -----------
     LOG4CXX_DEBUG(logger, "Opening transformer");
-    auto pTrfFrame = avtools::ThreadsafeFrame::Get(pVidStr->codecpar->width, pVidStr->codecpar->height, PIX_FMT);
-    assert( (AV_NOPTS_VALUE == (*pTrfFrame)->best_effort_timestamp) && (AV_NOPTS_VALUE == (*pTrfFrame)->pts) );
     // Get corners of the board
     cv::Mat trfMatrix = getPerspectiveTransformationMatrix(pInFrame);
     // Start the warper thread
+    auto pTrfFrame = avtools::ThreadsafeFrame::Get(pVidStr->codecpar->width, pVidStr->codecpar->height, PIX_FMT);
+    assert( (AV_NOPTS_VALUE == (*pTrfFrame)->best_effort_timestamp) && (AV_NOPTS_VALUE == (*pTrfFrame)->pts) );
     std::thread warperThread = threadedWarp(pInFrame, pTrfFrame, trfMatrix);
 
     // -----------
@@ -227,7 +227,7 @@ int main(int argc, const char * argv[])
     codecPar->codec_id = AVCodecID::AV_CODEC_ID_H264;
     avtools::MediaWriter lrWriter(outOptsLoRes.url, codecPar, pVidStr->time_base, outOptsLoRes.options);
     //    avtools::MediaWriter hrWriter(outOptsHiRes.url, codecPar, pVidStr->time_base, outOptsHiRes.options);
-//    std::thread writerThread1 = threadedWrite(pTrfFrame, lrWriter, "LR_writer");
+    std::thread writerThread1 = threadedWrite(pTrfFrame, lrWriter, "LR_writer");
 //    std::thread writerThread2 = threadedWrite(trfFrame, hrWriter, "HR_writer");
 
     // display the image and continue until someone hits a key
@@ -253,7 +253,7 @@ int main(int argc, const char * argv[])
     assert(g_Status.isEnded());
     readerThread.join();    //wait for reader thread to finish
     warperThread.join();    //wait for warper frame to finish
-//    writerThread1.join();   //wait for writer frame to finish
+    writerThread1.join();   //wait for writer frame to finish
 //    writerThread2.join();
     if (g_Status.hasExceptions())
     {
@@ -717,7 +717,7 @@ namespace
                     auto ppFrame = pFrame.lock();
                     if (!ppFrame)
                     {
-                        break;
+                        throw std::runtime_error("Threaded input frame is null.");
                     }
                     ppFrame->update(frame);
                 }

@@ -33,6 +33,7 @@ namespace avtools
 
     ThreadsafeFrame::~ThreadsafeFrame()
     {
+        auto lk = getWriteLock();
         if (pConvCtx_)
         {
             sws_freeContext(pConvCtx_);

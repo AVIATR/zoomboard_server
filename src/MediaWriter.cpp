@@ -357,7 +357,7 @@ namespace avtools
         {
             assert( formatCtx_ );
             // send frame to encoder
-            assert( (pFrame->width == codecCtx_->width) && (pFrame->height == codecCtx_->height) && (pFrame->format == codecCtx_->pix_fmt) );
+            assert( !pFrame || ((pFrame->width == codecCtx_->width) && (pFrame->height == codecCtx_->height) && (pFrame->format == codecCtx_->pix_fmt)) );
             int ret = avcodec_send_frame(codecCtx_.get(), pFrame);
             if (ret < 0)
             {

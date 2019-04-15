@@ -127,7 +127,10 @@ namespace avtools
         }
         catch (std::exception& err)
         {
-            av_frame_free(&pFrame_);
+            if (pFrame_)
+            {
+                av_frame_free(&pFrame_);
+            }
             std::throw_with_nested(MediaError("Frame: Unable to initialize frame."));
         }
     }

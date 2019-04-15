@@ -293,6 +293,7 @@ namespace avtools
             //copy codec params to stream
             avcodec_parameters_from_context(pStr->codecpar, codecCtx_.get());
             pStr->time_base = timebase;
+            pStr->start_time = AV_NOPTS_VALUE;
 
             assert( pStr->codecpar && (pStr->codecpar->codec_id == codecId) && (pStr->codecpar->codec_type == AVMEDIA_TYPE_VIDEO) );
             assert( (formatCtx_->nb_streams == 1) && (pStr == formatCtx_->streams[0]) );
@@ -333,11 +334,19 @@ namespace avtools
                 LOG4CXX_ERROR(logger, "Error while flushing packets and closing encoder: " << err.what());
             }
             //Write trailer
-            av_write_trailer(formatCtx_.get());
+            int ret = av_write_trailer(formatCtx_.get());
+            if (ret < 0)
+            {
+                LOG4CXX_ERROR(logger, "Error writing trailer: " << av_err2str(ret));
+            }
             // Close file if output is file
             if ( !(formatCtx_->oformat->flags & AVFMT_NOFILE) )
             {
-                avio_close(formatCtx_->pb);
+                ret = avio_close(formatCtx_->pb);
+                if (ret < 0)
+                {
+                    LOG4CXX_ERROR(logger, "Error closing output file " << av_err2str(ret));
+                }
             }
 #ifndef NDEBUG
             formatCtx_.dumpContainerInfo();
@@ -371,7 +380,11 @@ namespace avtools
                 }
             }
             pkt_.unref();
-            const AVStream* pStr = stream();
+            AVStream* pStr = formatCtx_->streams[0];
+            if (AV_NOPTS_VALUE == pStr->start_time) //first frame, set start time
+            {
+                pStr->start_time = pFrame->best_effort_timestamp;
+            }
             while (true) //write all available packets
             {
                 ret = avcodec_receive_packet(codecCtx_.get(), pkt_.get());
@@ -448,7 +461,9 @@ namespace avtools
         assert ( pImpl_ );
     }
 
-    MediaWriter::~MediaWriter() = default;
+    MediaWriter::~MediaWriter()
+    {
+    }
 
     const AVStream* MediaWriter::getStream() const
     {
@@ -467,7 +482,7 @@ namespace avtools
             }
             else
             {
-                pImpl_.reset(nullptr);  //close stream
+                pImpl_.reset(nullptr);  //close stream, implementation dtor flushes
             }
         }
         catch (std::exception& e)

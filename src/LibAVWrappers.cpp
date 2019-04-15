@@ -630,7 +630,12 @@ namespace avtools
         int ret = sws_scale(pConvCtx_, inFrame->data, inFrame->linesize, 0, inFrame->height, outFrame->data, outFrame->linesize);
         if (ret < 0)
         {
-            throw MediaError("Error converting frame to output format.", ret);
+            throw MediaError("Error converting frame to output format", ret);
+        }
+        ret = av_frame_copy_props(outFrame.get(), inFrame.get());
+        if (ret < 0)
+        {
+            throw MediaError("Error copying frame properties to output frame", ret);
         }
     }
 

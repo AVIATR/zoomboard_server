@@ -43,6 +43,7 @@ namespace avtools
     void ThreadsafeFrame::update(const avtools::Frame &frm)
     {
         assert(pFrame_);
+        int ret;
         if (frm)
         {
             LOG4CXX_DEBUG(logger, "Updating threadsafe frame with \n" << frm.info(1));
@@ -53,7 +54,7 @@ namespace avtools
                 {
                     LOG4CXX_DEBUG(logger, "Converting frame...");
                     pConvCtx_ = sws_getCachedContext(pConvCtx_, frm->width, frm->height, (AVPixelFormat) frm->format, pFrame_->width, pFrame_->height, (AVPixelFormat) pFrame_->format, SWS_LANCZOS | SWS_ACCURATE_RND, nullptr, nullptr, nullptr);
-                    int ret = sws_scale(pConvCtx_, frm->data, frm->linesize, 0, frm->height, pFrame_->data, pFrame_->linesize);
+                    ret = sws_scale(pConvCtx_, frm->data, frm->linesize, 0, frm->height, pFrame_->data, pFrame_->linesize);
                     if (ret < 0)
                     {
                         throw avtools::MediaError("Error converting frame to output format.", ret);
@@ -61,19 +62,32 @@ namespace avtools
                 }
                 else
                 {
-                    av_frame_copy(pFrame_, frm.get());
+                    ret = av_frame_copy(pFrame_, frm.get());
+                    if (ret < 0)
+                    {
+                        throw avtools::MediaError("Error copying frame.", ret);
+                    }
                 }
 
-                av_frame_copy_props(pFrame_, frm.get());
+                ret = av_frame_copy_props(pFrame_, frm.get());
+                if (ret < 0)
+                {
+                    throw avtools::MediaError("Error copying frame properties.", ret);
+                }
                 LOG4CXX_DEBUG(logger, "Updated frame info: \n" << info(1));
             }
         }
         else
         {
-            // Put frame in uninitialized state
-            av_freep(&pFrame_);
-            type = AVMediaType::AVMEDIA_TYPE_UNKNOWN;
-            assert( !this->operator bool() );
+            {
+                auto lk = getWriteLock();
+                // Put frame in uninitialized state
+                if (pFrame_)
+                {
+                    av_freep(&pFrame_);
+                }
+                type = AVMediaType::AVMEDIA_TYPE_UNKNOWN;
+            }
         }
         cv.notify_all();
     }

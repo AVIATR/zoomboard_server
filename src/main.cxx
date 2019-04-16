@@ -786,13 +786,15 @@ namespace
                         auto lock = inFrame.getReadLock();
                         LOG4CXX_DEBUG(logger, "Received frame with pts: " << inFrame->best_effort_timestamp);
                         LOG4CXX_DEBUG(logger, "Last written timestamp:" << ts);
-                        if (inFrame->best_effort_timestamp <= ts)
-                        {
-                            inFrame.cv.wait(lock, [&inFrame, ts](){return g_Status.isEnded() || (inFrame->best_effort_timestamp > ts);});
-                        }
+//                        inFrame.cv.wait_for(lock, std::chrono::milliseconds(10), [&inFrame, ts](){return g_Status.isEnded() || (inFrame->best_effort_timestamp > ts);});
+                        inFrame.cv.wait(lock, [&inFrame, ts](){return g_Status.isEnded() || (inFrame->best_effort_timestamp > ts);});
                         if (g_Status.isEnded())
                         {
                             break;
+                        }
+                        if (inFrame->best_effort_timestamp <= ts)
+                        {
+                            continue;
                         }
                         ts = inFrame->best_effort_timestamp;
                         if (hConvCtx)
@@ -844,10 +846,7 @@ namespace
                     const auto& inFrame = *ppInFrame;
                     {
                         auto rLock = inFrame.getReadLock();
-                        if (inFrame->best_effort_timestamp <= ts)
-                        {
-                            inFrame.cv.wait(rLock, [&inFrame, ts](){return g_Status.isEnded() ||  (inFrame->best_effort_timestamp > ts);});    //wait until fresh frame is available
-                        }
+                        inFrame.cv.wait(rLock, [&inFrame, ts](){return g_Status.isEnded() ||  (inFrame->best_effort_timestamp > ts);});    //wait until fresh frame is available
                         if (g_Status.isEnded())
                         {
                             break;
@@ -859,17 +858,20 @@ namespace
                             throw std::runtime_error("Warper output frame is null");
                         }
                         auto& warpedFrame = *ppWarpedFrame;
-                        auto wLock = warpedFrame.getWriteLock();
-                        assert(warpedFrame->best_effort_timestamp < ts);
-                        cv::Mat inImg = getImage(inFrame);
-                        cv::Mat outImg = getImage(warpedFrame);
-                        cv::warpPerspective(inImg, outImg, trfMatrix, inImg.size(), cv::InterpolationFlags::INTER_LANCZOS4);
-                        int ret = av_frame_copy_props(warpedFrame.get(), inFrame.get());
-                        if (ret < 0)
                         {
-                            throw std::runtime_error("Unable to copy frame properties");
+                            auto wLock = warpedFrame.getWriteLock();
+                            assert(warpedFrame->best_effort_timestamp < ts);
+                            cv::Mat inImg = getImage(inFrame);
+                            cv::Mat outImg = getImage(warpedFrame);
+                            cv::warpPerspective(inImg, outImg, trfMatrix, inImg.size(), cv::InterpolationFlags::INTER_LANCZOS4);
+                            int ret = av_frame_copy_props(warpedFrame.get(), inFrame.get());
+                            if (ret < 0)
+                            {
+                                throw avtools::MediaError("Unable to copy frame properties", ret);
+                            }
+                            LOG4CXX_DEBUG(logger, "Warped frame info: \n" << warpedFrame.info(1));
                         }
-                        LOG4CXX_DEBUG(logger, "Warped frame info: \n" << warpedFrame.info(1));
+                        warpedFrame.cv.notify_all();
                     }
                 }
             }

@@ -38,13 +38,12 @@
         },
         "hires":
         {
-            "url": "stream_hr.flv",
+            "url": "stream_hr.m3u8",
             "options":
             {
                 "framerate": "5",
                 "video_size": "848x480",
-                "pixel_format": "yuv420p",
-                "profile": "main",
+                "profile": "high422",
                 "preset": "ultrafast",
                 "tune": "zerolatency"
             }

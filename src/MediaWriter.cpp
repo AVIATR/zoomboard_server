@@ -224,8 +224,8 @@ namespace avtools
             {
                 throw MediaError("File format " + std::string(pOutFormat->name) + " is unable to store " + std::to_string(codecId) + " streams.", ret);
             }
-            codecCtx_->codec_tag = av_codec_get_tag(pOutFormat->codec_tag, codecCtx_->codec_id);
-            LOG4CXX_DEBUG(logger, "MediaWriter will use a " << pOutFormat->name << " container to store " << codecId << " encoded video." );
+            //hls-specific options
+            av_opt_set_int(formatCtx_->priv_data, "hls_list_size", 0, 0);
 
             // Open IO Context
             if ( !(formatCtx_->flags & AVFMT_NOFILE) )
@@ -239,6 +239,8 @@ namespace avtools
             }
             LOG4CXX_DEBUG(logger, "MediaWriter: Opened output file " << url << " in " << pOutFormat->long_name << " format.");
             //Initialize codec context
+            codecCtx_->codec_tag = av_codec_get_tag(pOutFormat->codec_tag, codecCtx_->codec_id);
+            LOG4CXX_DEBUG(logger, "MediaWriter will use a " << pOutFormat->name << " container to store " << codecId << " encoded video." );
             codecCtx_->strict_std_compliance = COMPLIANCE;
             codecCtx_->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;    // let codec know we are using global header
             codecCtx_->time_base = timebase;                    // Set timebase

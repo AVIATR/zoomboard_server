@@ -226,9 +226,9 @@ int main(int argc, const char * argv[])
     avtools::CodecParameters codecPar(pVidStr->codecpar);
     codecPar->codec_id = AVCodecID::AV_CODEC_ID_H264;
     avtools::MediaWriter lrWriter(outOptsLoRes.url, codecPar, pVidStr->time_base, outOptsLoRes.options);
-    //    avtools::MediaWriter hrWriter(outOptsHiRes.url, codecPar, pVidStr->time_base, outOptsHiRes.options);
+    avtools::MediaWriter hrWriter(outOptsHiRes.url, codecPar, pVidStr->time_base, outOptsHiRes.options);
     std::thread writerThread1 = threadedWrite(pTrfFrame, lrWriter, "writer_lo");
-//    std::thread writerThread2 = threadedWrite(pTrfFrame, hrWriter, "writer_hi");
+    std::thread writerThread2 = threadedWrite(pTrfFrame, hrWriter, "writer_hi");
 
     // display the image and continue until someone hits a key
     const std::string OUTPUT_WINDOW = "Warped image";
@@ -255,9 +255,9 @@ int main(int argc, const char * argv[])
     // -----------
     assert(g_Status.isEnded());
     readerThread.join();    //wait for reader thread to finish
-    warperThread.join();    //wait for warper frame to finish
-    writerThread1.join();   //wait for writer frame to finish
-//    writerThread2.join();
+    warperThread.join();    //wait for frame warper to finish
+    writerThread1.join();   //wait for writer to finish
+    writerThread2.join();
     if (g_Status.hasExceptions())
     {
         g_Status.logExceptions();
@@ -786,7 +786,6 @@ namespace
                         auto lock = inFrame.getReadLock();
                         LOG4CXX_DEBUG(logger, "Received frame with pts: " << inFrame->best_effort_timestamp);
                         LOG4CXX_DEBUG(logger, "Last written timestamp:" << ts);
-//                        inFrame.cv.wait_for(lock, std::chrono::milliseconds(10), [&inFrame, ts](){return g_Status.isEnded() || (inFrame->best_effort_timestamp > ts);});
                         inFrame.cv.wait(lock, [&inFrame, ts](){return g_Status.isEnded() || (inFrame->best_effort_timestamp > ts);});
                         if (g_Status.isEnded())
                         {

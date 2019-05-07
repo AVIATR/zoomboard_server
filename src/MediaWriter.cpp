@@ -226,6 +226,10 @@ namespace avtools
             }
             //hls-specific options
             av_opt_set_int(formatCtx_->priv_data, "hls_list_size", 0, 0);
+            av_opt_set(formatCtx_->priv_data, "hls_flags", "+single_file", 0);
+            av_opt_set_double(formatCtx_->priv_data, "hls_time", 0.1, 0);
+            av_opt_set(formatCtx_->priv_data, "hls_allow_cache", "0", 0);
+            av_opt_set(formatCtx_->priv_data, "method", "PUT", 0);
 
             // Open IO Context
             if ( !(formatCtx_->flags & AVFMT_NOFILE) )
@@ -264,7 +268,7 @@ namespace avtools
             av_opt_set(codecCtx_->priv_data, "coder_type", "1", 0);
             av_opt_set(codecCtx_->priv_data, "scenechange_threshold", "40", 0);
 
-            // Open en coder
+            // Open encoder
             const AVCodec* pEncoder = avcodec_find_encoder(codecId);
             if (!pEncoder)
             {

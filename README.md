@@ -12,5 +12,10 @@ This json file provides the necessary configuration options (input device, resol
 
 
 ## References
+### LibAV Reading/Writing Process
+An overview of the LibAV read/write process can be found in the documentation.
+* *Decoding Process:* An overview is found [here](https://ffmpeg.org/doxygen/2.8/group__lavf__decoding.html)
+* *Encoding Process:* An overview is found [here](https://ffmpeg.org/doxygen/2.8/group__lavf__encoding.html) and [here](https://ffmpeg.org/doxygen/2.8/group__libavf.html)
+
 ### X264 Settings
 We are using libx264 for encoding. The presets and how they correspond to various codec parameters can be found [here](http://dev.beandog.org/x264_preset_reference.html). If you have the `x264` binary installed, you can also see the installed presets by `x264 --fullhelp`.

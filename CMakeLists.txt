@@ -66,6 +66,14 @@ if (FFMPEG_FOUND)
     message(STATUS "FFMPEG_INCLUDE_DIRS = ${FFMPEG_INCLUDE_DIRS}")
 endif()
 
+# Find Boost
+find_package(Boost COMPONENTS program_options filesystem REQUIRED)
+if (Boost_FOUND)
+    message(STATUS "Boost Found")
+    message(STATUS "Boost_LIBRARIES = ${Boost_LIBRARIES}")
+    message(STATUS "Boost_INCLUDE_DIRS = ${Boost_INCLUDE_DIRS}")
+endif()
+
 # Find OpenCV
 find_package(OpenCV REQUIRED)
 if (OpenCV_FOUND)

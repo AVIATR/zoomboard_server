@@ -71,31 +71,65 @@ namespace avtools
             throw std::invalid_argument("Info re: " + std::to_string(codecPar.codec_type) + " codecs is not available.");
         }
     }
-    
+
+
     std::string getFrameInfo(const AVFrame* pFrame, const AVStream* pStr, int indent/*=0*/)
     {
         assert(pFrame && pStr);
         const std::string filler(indent, '\t');
         std::stringstream ss;
-        const AVMediaType type = pStr->codecpar->codec_type;
-        ss << filler << "\tType: " << type << std::endl;
-        ss << filler << "\tSource: " << *pStr << std::endl;
-        const std::int64_t pts = pFrame->best_effort_timestamp;
-        ss << filler << "\tPTS: " << pts << "\t[" << calculateTime(pts, pStr->time_base) << " s]" << std::endl;
+        AVMediaType type = pStr->codecpar->codec_type;
+        ss << filler << "Source: " << *pStr << std::endl;
+        ss << getFrameInfo(pFrame, type, indent);
+        ss << filler << "time: " << calculateTime(pFrame->best_effort_timestamp, pStr->time_base) << "s [timebase=" \
+            << pStr->time_base << "]" << std::endl;
+        return ss.str();
+    }
+
+    std::string getFrameInfo(const AVFrame* pFrame, AVMediaType type, int indent/*=0*/)
+    {
+        assert(pFrame);
+        const std::string filler(indent, '\t');
+        std::stringstream ss;
+        ss << filler << "Type: " << type << std::endl;
+#ifndef NDEBUG
+        ss << filler << "Data allocated at " << static_cast<void*>(pFrame->data[0]) << std::endl;
+        ss << filler << "Stride: ";
+        for (int i = 0; (i < AV_NUM_DATA_POINTERS) && (pFrame->linesize[i]); ++i)
+        {
+            ss << pFrame->linesize[i] << " ";
+        }
+        ss << std::endl;
+#endif
         if (type == AVMEDIA_TYPE_VIDEO)
         {
-            ss << filler << "\tPicture Format: " << (AVPixelFormat) pFrame->format << std::endl;;
-            ss << filler << "\tSize (w x h): " << pFrame->width << "x" << pFrame->height << std::endl;
-            ss << filler << "\tAspect Ratio: " << pFrame->sample_aspect_ratio.num << "/" <<pFrame->sample_aspect_ratio.den << std::endl;
-            ss << filler << "\tColorspace: " << pFrame->colorspace << std::endl;
-            ss << filler << "\tPicture Type:" << pFrame->pict_type << std::endl;
-            return ss.str();
+            ss << filler << "Picture Format: " << (AVPixelFormat) pFrame->format << std::endl;;
+            ss << filler << "Size (w x h): " << pFrame->width << "x" << pFrame->height << std::endl;
+            ss << filler << "Aspect Ratio: " << pFrame->sample_aspect_ratio.num << "/" <<pFrame->sample_aspect_ratio.den << std::endl;
+            ss << filler << "Frame Type:" << pFrame->pict_type << std::endl;
         }
         else
         {
-            ss << filler << "No further info is available" << std::endl;
+            ss << filler << "-No media info is available-" << std::endl;
         }
+        ss << filler << "Timestamp:" << pFrame->best_effort_timestamp << std::endl;
+        ss << filler << "pts:" << pFrame->pts << std::endl;
+        ss << filler << "pkt_dts:" << pFrame->pkt_dts << std::endl;
         return ss.str();
     }
+
+    std::string getStreamInfo(const AVStream* pStr, int indent/*=0*/)
+    {
+        assert(pStr);
+        const std::string filler(indent, '\t');
+        std::stringstream ss;
+        const AVMediaType type = pStr->codecpar->codec_type;
+        ss << filler << "\tType: " << type << std::endl;
+        ss << filler << "\tTimebase: " << pStr->time_base << std::endl;
+        ss << filler << "\tStart ime: " << calculateTime(pStr->start_time, pStr->time_base) << std::endl;
+        ss << filler << "\tAvg. frame rate: " << pStr->avg_frame_rate << std::endl;
+        return ss.str();
+    }
+
 }   //::avtools
 

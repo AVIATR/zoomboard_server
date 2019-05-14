@@ -7,6 +7,7 @@
 //
 
 #include "MediaWriter.hpp"
+#include "Media.hpp"
 #include <string>
 #include "log4cxx/logger.h"
 
@@ -14,12 +15,55 @@ extern "C" {
 #include <libavformat/avformat.h>
 #include <libavcodec/avcodec.h>
 #include <libavdevice/avdevice.h>
+#include <libavutil/parseutils.h>
+#include <libavfilter/avfilter.h>
+#include <libavfilter/buffersink.h>
+#include <libavfilter/buffersrc.h>
 }
 
 namespace
 {
     log4cxx::LoggerPtr logger(log4cxx::Logger::getLogger("zoombrd.MediaWriter"));
-}
+
+    /// Adds a filter to a graph, and returns the corresponding filter context
+    /// Arguments can then be passed by setting the corresponding flags in the filter context
+    /// @param[in] filter type filter type to use, see https://libav.org/documentation/libavfilter.html
+    /// @param[in] name name of the filter in the graph
+    /// @param[in] pGraph ptr to the grap hto add the filter to
+    /// @return an initialized filter context for this filter.
+    [[maybe_unused]]
+    AVFilterContext* addFilterToGraph(const std::string& filterType, const std::string& name, const avtools::Dictionary& args, AVFilterGraph* pGraph)
+    {
+        assert(pGraph);
+        AVFilterContext* pCtx = nullptr;
+        const AVFilter *pF  = avfilter_get_by_name(filterType.c_str());
+        if (!pF)
+        {
+            throw std::runtime_error("Unable to find " + filterType + " filter");
+        }
+
+        const std::string filterArgs = args.as_string('=', ':');
+        LOG4CXX_DEBUG(logger, "Adding " << filterType << " filter to graph with arguments " << filterArgs);
+        int ret = avfilter_graph_create_filter(&pCtx, pF, name.c_str(), filterArgs.c_str(), NULL, pGraph);
+        if (ret < 0)
+        {
+            throw avtools::MediaError("Unable to add " + filterType + " filter to filter graph", ret);
+        }
+        const int nFilters = pGraph->nb_filters;
+        assert(pCtx == pGraph->filters[nFilters-1]);
+        if (nFilters > 1)
+        {
+            AVFilterContext* pPrevFilter = pGraph->filters[nFilters-2];
+            ret = avfilter_link(pPrevFilter, 0, pCtx, 0);
+            if (ret < 0)
+            {
+                throw avtools::MediaError("Unable to link " + std::string(pPrevFilter->name) + " to " + name, ret);
+            }
+        }
+
+        return pCtx;
+    }
+}   //::<anon>
 
 namespace avtools
 {
@@ -33,346 +77,117 @@ namespace avtools
     private:
         FormatContext formatCtx_;                   ///< format context for the output file
         CodecContext codecCtx_;                     ///< codec context for the output video stream
+        Frame filtFrame_;                           ///< filter that is read from the filtergraph
         Packet pkt_;                                ///< Packet to use for encoding frames
+        AVFilterInOut *pIn_, *pOut_;                ///< filtergraph inputs/outputs
+        AVFilterGraph *pGraph_;                     ///< filtergraph
 
-//        const int COMPLIANCE = FF_COMPLIANCE_NORMAL; //alternatively, to allow experimental codecs use FF_COMPLIANCE_EXPERIMENTAL
-        const int COMPLIANCE = FF_COMPLIANCE_STRICT;
-//        /// Ctor
-//        Implementation(
-//            const std::string& url,
-//            const AVCodecParameters& codecParam,
-//            const TimeBaseType& timebase,
-//            bool allowExperimentalCodecs=false
-//        ):
-//        hCtx_( allocateOutputFormatContext(url) ),
-//        hCC_( avtools::allocateCodecContext() ),
-//        hPkt_( avtools::allocatePacket() )
-//        {
-////            av_register_all();
-//            if (!hCtx_ || !hCC_ || !hPkt_)
-//            {
-//                throw MediaError("Unable to allocate contexts.");
-//            }
-//            avtools::initPacket(hPkt_);
-//
-//            //Open the output file
-//            if ( !(hCtx_->flags & AVFMT_NOFILE) )
-//            {
-//                int ret = avio_open(&hCtx_->pb, url.c_str(), AVIO_FLAG_WRITE);
-//                if (ret < 0)
-//                {
-//                    throw MediaError("Could not open " + url, ret);
-//                }
-//                assert(hCtx_->pb);
-//            }
-//            LOGD("MediaWriter: Opened output stream ", url, " in ", hCtx_->oformat->long_name, " format.");
-//
-//            //Add the video stream to the output context
-//            // Ensure that the provided container can contain the requested output codec
-//            assert (codecParam.codec_type == AVMEDIA_TYPE_VIDEO);
-//            const int compliance = (allowExperimentalCodecs ? FF_COMPLIANCE_EXPERIMENTAL : FF_COMPLIANCE_NORMAL);
-//            const AVCodecID codecId = codecParam.codec_id;
-//            AVOutputFormat* pOutFormat = hCtx_->oformat;
-//            assert(pOutFormat);
-//            int ret = avformat_query_codec(pOutFormat, codecId, compliance);
-//            if ( ret <= 0 )
-//            {
-//                throw MediaError("File format " + std::string(pOutFormat->name) + " is unable to store " + std::to_string(codecId) + " streams.", ret);
-//            }
-//
-//            // Find encoder
-//            const AVCodec* pEncoder = avcodec_find_encoder(codecId);
-//            if (!pEncoder)
-//            {
-//                throw MediaError("Cannot find an encoder for " + std::to_string(codecId));
-//            }
-//            // Set up encoder context
-//            ret = avcodec_parameters_to_context(hCC_.get(), &codecParam);
-//            if (ret < 0)
-//            {
-//                throw MediaError("Unable to copy codec parameters to encoder context.", ret);
-//            }
-//            AVDictionary *opts = nullptr;
-//
-//            //Initialize codec context
-//            hCC_->strict_std_compliance = compliance;
-//            hCC_->flags |= AV_CODEC_FLAG_GLOBAL_HEADER; // let codec know if we are using global header
-//            hCC_->time_base = timebase;        // Set timebase
-//            if (AV_CODEC_ID_H264 == codecId)   // ffmpeg has issues with x264, and the default presets are broken. These need to be manually fixed for encoding
-//            {
-//                int losses = 0;
-//                hCC_->pix_fmt = avcodec_find_best_pix_fmt_of_list(pEncoder->pix_fmts, (AVPixelFormat) codecParam.format, false, &losses);
-//                if (losses)
-//                {
-//                    LOGW("StreamEncoder: Converting picture format from ", (AVPixelFormat) codecParam.format, " to output format ", hCC_->pix_fmt, "will result in losses due to: ");
-//                    if (losses & FF_LOSS_RESOLUTION)
-//                    {
-//                        LOGD("\tresolution change");
-//                    }
-//                    if (losses & FF_LOSS_DEPTH)
-//                    {
-//                        LOGD("\tcolor depth change");
-//                    }
-//                    if (losses & FF_LOSS_COLORSPACE)
-//                    {
-//                        LOGD("\tcolorspace conversion");
-//                    }
-//                    if (losses & FF_LOSS_COLORQUANT)
-//                    {
-//                        LOGD("\tcolor quantization");
-//                    }
-//                    if (losses & FF_LOSS_CHROMA)
-//                    {
-//                        LOGD("\tloss of chroma");
-//                    }
-//                }
-//                hCC_->qmin = 10;
-//                hCC_->qmax = 51;
-//                hCC_->qcompress = 0.6;
-//                hCC_->max_qdiff = 4;
-//                hCC_->me_range = 3;
-//                hCC_->max_b_frames = 3;
-//                //hCC_->bit_rate = 1000000;
-//                hCC_->refs = 3;
-//                ret = av_dict_set(&opts, "profile", "main", 0);   //also initializes opts
-//                if (ret < 0)
-//                {
-//                    LOGE("StreamEncoder: Unable to set profile for H264 encoder: ", av_err2str(ret));
-//                }
-//                ret = av_dict_set(&opts, "preset", "medium", 0);
-//                if (ret < 0)
-//                {
-//                    LOGE("StreamEncoder: Unable to set preset for H264 encoder: ", av_err2str(ret));
-//                }
-//                ret = av_dict_set(&opts, "level", "3.1", 0);
-//                if (ret < 0)
-//                {
-//                    LOGE("StreamEncoder: Unable to set level for H264 encoder: ", av_err2str(ret));
-//                }
-//                ret = av_dict_set(&opts, "mpeg_quant", "0", 0);
-//                if (ret < 0)
-//                {
-//                    LOGE("StreamEncoder: Unable to set mpeg quantization for H264 encoder: ", av_err2str(ret));
-//                }
-//                assert(opts);
-//            }
-//
-//            // open codec for encoding
-//            ret = avcodec_open2(hCC_.get(), pEncoder, &opts);
-//            if (ret < 0)
-//            {
-//                throw MediaError("Unable to open encoder for codec " + std::to_string(codecId), ret);
-//            }
-//            assert( avcodec_is_open(hCC_.get()) );
-//            LOGD("StreamEncoder: Opened encoder for ", avtools::getCodecInfo(hCC_.get()));
-//
-//            // Add stream
-//            AVStream* pStr = avformat_new_stream(hCtx_.get(), pEncoder);
-//            if ( !pStr )
-//            {
-//                throw MediaError("Unable to add stream for " + std::to_string(codecId));
-//            }
-//
-//            //copy codec params to stream
-//            avcodec_parameters_from_context(pStr->codecpar, hCC_.get());
-//            pStr->time_base = timebase;
-//
-//            assert( pStr->codecpar && (pStr->codecpar->codec_id == codecId) && (pStr->codecpar->codec_type == AVMEDIA_TYPE_VIDEO) );
-//            assert( (hCtx_->nb_streams == 1) && (pStr == hCtx_->streams[0]) );
-//            LOGD("MediaWriter: Opened ", *pStr);
-//            // Write stream header
-//            ret = avformat_write_header(hCtx_.get(), nullptr);
-//            if (ret < 0)
-//            {
-//                close();
-//                throw MediaError("Error occurred when writing output stream header.", ret);
-//            }
-//            LOGD("MediaWriter: Opened output container ", hCtx_->url);
-//#ifndef NDEBUG
-//            avtools::dumpContainerInfo(hCtx_.get(), true);
-//#endif
-//        }
-    public:
-
-        Implementation(
-            const std::string& url,
-            const CodecParameters& codecParam,
-            const TimeBaseType& timebase,
-            Dictionary& opts
-        ):
-        formatCtx_(FormatContext::OUTPUT),
-        codecCtx_(codecParam),
-        pkt_()
+        /// Initializes the filter graph
+        /// @param[in] pFrame input frame
+        /// @param[in] timebase timebase for the incoming frame's timestamps
+        void initFilterGraph(const AVFrame* pFrame, avtools::TimeBaseType timebase)
         {
-            assert (codecParam->codec_type == AVMEDIA_TYPE_VIDEO);
-            avdevice_register_all();    // Register devices
-
-            // Find encoder
-            const AVCodecID codecId = codecCtx_->codec_id;
-            //Init outout format context, open output file or stream
-            int ret = avformat_alloc_output_context2(&formatCtx_.get(), nullptr, nullptr, url.c_str());
-            if (ret < 0)
+            assert( pIn_ && pOut_ && pGraph_);
+            assert(pFrame);
+            const AVStream* pStr = stream();
+            assert(pStr);
+            const AVCodecParameters *pCodecPar = pStr->codecpar;
+            assert(pCodecPar);
+            // Init source
+            pIn_->name = av_strdup("input");
+            pIn_->pad_idx = 0;
+            pIn_->next = nullptr;
             {
-                throw MediaError("Unable to allocate output context.", ret);
+                Dictionary args;
+                args.add("width", pFrame->width);
+                args.add("height", pFrame->height);
+                args.add("time_base", timebase);
+                args.add("sar", pFrame->sample_aspect_ratio);
+                args.add("pix_fmt", (AVPixelFormat) pFrame->format);
+                pIn_->filter_ctx = addFilterToGraph("buffer", "input", args, pGraph_);
+                LOG4CXX_DEBUG(logger, "Added source to filtergraph");
             }
 
-            //Test that container can store this codec.
-            AVOutputFormat* pOutFormat = formatCtx_->oformat;
-            assert(pOutFormat);
-            ret = avformat_query_codec(pOutFormat, codecId, COMPLIANCE);
-            if ( ret <= 0 )
+            // Convert framerate
             {
-                throw MediaError("File format " + std::string(pOutFormat->name) + " is unable to store " + std::to_string(codecId) + " streams.", ret);
+                Dictionary args;
+                args.add("fps", pStr->avg_frame_rate);
+                addFilterToGraph("fps", "change framerate", args, pGraph_);
+                LOG4CXX_DEBUG(logger, "Added fps filter to convert to " << pStr->avg_frame_rate << "fps");
             }
-            //hls-specific options
-            av_opt_set_int(formatCtx_->priv_data, "hls_list_size", 0, 0);
-            av_opt_set(formatCtx_->priv_data, "hls_flags", "+single_file", 0);
-            av_opt_set_double(formatCtx_->priv_data, "hls_time", 0.1, 0);
-            av_opt_set(formatCtx_->priv_data, "hls_allow_cache", "0", 0);
-            av_opt_set(formatCtx_->priv_data, "method", "PUT", 0);
 
-            // Open IO Context
-            if ( !(formatCtx_->flags & AVFMT_NOFILE) )
+            // Init scale filter if input & output have different sizes
+            if ( (pFrame->width != pCodecPar->width) || (pFrame->height != pCodecPar->height) )
             {
-                ret = avio_open2(&formatCtx_->pb, url.c_str(), AVIO_FLAG_WRITE, nullptr, &opts.get());
-                if (ret < 0)
                 {
-                    throw MediaError("Could not open " + url, ret);
+                    Dictionary args;
+                    args.add("w", pStr->codecpar->width);
+                    args.add("h", pStr->codecpar->height);
+                    addFilterToGraph("scale", "resize", args, pGraph_);
+                    LOG4CXX_DEBUG(logger, "Added scale filter to convert from "
+                                  << pFrame->width << "x" << pFrame->height << " to "
+                                  << pCodecPar->width << "x" << pCodecPar->height);
                 }
-                assert(formatCtx_->pb);
-            }
-            LOG4CXX_DEBUG(logger, "MediaWriter: Opened output file " << url << " in " << pOutFormat->long_name << " format.");
-            //Initialize codec context
-            codecCtx_->codec_tag = av_codec_get_tag(pOutFormat->codec_tag, codecCtx_->codec_id);
-            LOG4CXX_DEBUG(logger, "MediaWriter will use a " << pOutFormat->name << " container to store " << codecId << " encoded video." );
-            codecCtx_->strict_std_compliance = COMPLIANCE;
-            codecCtx_->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;    // let codec know we are using global header
-            codecCtx_->time_base = timebase;                    // Set timebase
-            codecCtx_->bit_rate_tolerance = 0;
-            codecCtx_->rc_max_rate = 0;
-            codecCtx_->rc_buffer_size = 0;
-            codecCtx_->gop_size = 5;
-            codecCtx_->max_b_frames = 0;
-            codecCtx_->me_cmp = 1;
-            codecCtx_->me_range = 16;
-            codecCtx_->me_subpel_quality = 5;
-            codecCtx_->qmin = 10;
-            codecCtx_->qmax = 51;
-            codecCtx_->i_quant_factor = 0.71;
-            codecCtx_->qcompress = 0.6;
-            codecCtx_->max_qdiff = 4;
-            av_opt_set(codecCtx_->priv_data, "profile", "high422", 0);
-            av_opt_set(codecCtx_->priv_data, "preset", "ultrafast", 0);
-            av_opt_set(codecCtx_->priv_data, "tune", "zerolatency", 0);
-            av_opt_set(codecCtx_->priv_data, "b_frame_strategy", "1", 0);
-            av_opt_set(codecCtx_->priv_data, "coder_type", "1", 0);
-            av_opt_set(codecCtx_->priv_data, "scenechange_threshold", "40", 0);
-
-            // Open encoder
-            const AVCodec* pEncoder = avcodec_find_encoder(codecId);
-            if (!pEncoder)
-            {
-                throw MediaError("Cannot find an encoder for " + std::to_string(codecId));
-            }
-            int losses = 0;
-            codecCtx_->pix_fmt = avcodec_find_best_pix_fmt_of_list(pEncoder->pix_fmts, (AVPixelFormat) codecParam->format, false, &losses);
-            if (codecCtx_->pix_fmt != codecParam->format)
-            {
-                LOG4CXX_INFO(logger, "Setting output pixel format to " << codecCtx_->pix_fmt)
             }
 
-            ret = avcodec_open2(codecCtx_.get(), pEncoder, &opts.get());
+            // Init format filter if input & output have different pixel formats
+            if ( pFrame->format != pStr->codecpar->format )
+            {
+                {
+                    Dictionary args;
+                    args.add("pix_fmts", pStr->codecpar->format);
+                    addFilterToGraph("format", "change format", args, pGraph_);
+                    LOG4CXX_DEBUG(logger, "Added format filter to convert from " << (AVPixelFormat) pFrame->format
+                                  << " to " << (AVPixelFormat) pCodecPar->format);
+                }
+            }
+
+            // Init aspect ratio filter if input & output have different aspect ratios
+            if ( 0 != av_cmp_q(pFrame->sample_aspect_ratio, pCodecPar->sample_aspect_ratio) )
+            {
+                {
+                    Dictionary args;
+                    args.add("sar", pCodecPar->sample_aspect_ratio);
+                    addFilterToGraph("setsar", "adjust aspect", args, pGraph_);
+                    LOG4CXX_DEBUG(logger, "Added setsar filter to convert aspect ratio from " << pFrame->sample_aspect_ratio << " to " << pCodecPar->sample_aspect_ratio);
+                }
+            }
+
+            //Init sink
+            pOut_->name = av_strdup("output");
+            pOut_->pad_idx = 0;
+            pOut_->next = nullptr;
+            {
+                Dictionary args;
+                pOut_->filter_ctx = addFilterToGraph("buffersink", "output", args, pGraph_);
+                LOG4CXX_DEBUG(logger, "Added sink filter to graph");
+            }
+
+            // Configure links
+            int ret = avfilter_graph_config(pGraph_, nullptr);
             if (ret < 0)
             {
-                throw MediaError("Unable to open encoder context", ret);
-            }
-            assert( codecCtx_.isOpen() );
-            LOG4CXX_DEBUG(logger, "MediaWriter: Opened encoder for " << codecCtx_.info());
-
-            // Add stream
-            AVStream* pStr = avformat_new_stream(formatCtx_.get(), pEncoder);
-            if ( !pStr )
-            {
-                throw MediaError("Unable to add stream for " + std::to_string(codecId));
+                throw MediaError("Unable to configure filter graph", ret);
             }
 
-            //copy codec params to stream
-            avcodec_parameters_from_context(pStr->codecpar, codecCtx_.get());
-            pStr->time_base = timebase;
-            pStr->start_time = AV_NOPTS_VALUE;
-
-            assert( pStr->codecpar && (pStr->codecpar->codec_id == codecId) && (pStr->codecpar->codec_type == AVMEDIA_TYPE_VIDEO) );
-            assert( (formatCtx_->nb_streams == 1) && (pStr == formatCtx_->streams[0]) );
-            LOG4CXX_DEBUG(logger, "MediaWriter: Opened " << *pStr);
-            // Write stream header
-            ret = avformat_write_header(formatCtx_.get(), nullptr);
-            if (ret < 0)
-            {
-                avtools::CharBuf buf(AV_FOURCC_MAX_STRING_SIZE);
-                LOG4CXX_DEBUG(logger, "Output codec: " << av_fourcc_make_string(buf.get(), codecCtx_->codec_tag) << ":" << codecCtx_->codec_id);
-                throw MediaError("Error occurred when writing output stream header.", ret);
-            }
-            LOG4CXX_DEBUG(logger, "MediaWriter: Opened output file " << formatCtx_->url);
 #ifndef NDEBUG
-            formatCtx_.dumpContainerInfo();
-            LOG4CXX_DEBUG(logger, "Unused stream options: " << opts.as_string());
+            const char* graphDesc = avfilter_graph_dump(pGraph_, nullptr);
+            if (!graphDesc)
+            {
+                throw std::runtime_error("Unable to get graph description");
+            }
+            LOG4CXX_DEBUG(logger, "Filter graph initialized:\n" << graphDesc);
+            av_freep( &graphDesc);
 #endif
         }
 
-        Implementation(
-            const std::string& url,
-            const AVCodecParameters& codecParam,
-            const TimeBaseType& timebase,
-            Dictionary& opts
-        ):
-        Implementation(url, CodecParameters(&codecParam), timebase, opts)
-        {}
-
-        /// Dtor
-        ~Implementation()
+        /// Encoders & multiplexes a video frame
+        /// @param[in] pFrame video frame to write
+        void encodeFrame(const AVFrame* pFrame)
         {
-            try
-            {
-                write(nullptr);
-            }
-            catch (std::exception& err)
-            {
-                LOG4CXX_ERROR(logger, "Error while flushing packets and closing encoder: " << err.what());
-            }
-            //Write trailer
-            int ret = av_write_trailer(formatCtx_.get());
-            if (ret < 0)
-            {
-                LOG4CXX_ERROR(logger, "Error writing trailer: " << av_err2str(ret));
-            }
-            // Close file if output is file
-            if ( !(formatCtx_->oformat->flags & AVFMT_NOFILE) )
-            {
-                ret = avio_close(formatCtx_->pb);
-                if (ret < 0)
-                {
-                    LOG4CXX_ERROR(logger, "Error closing output file " << av_err2str(ret));
-                }
-            }
-#ifndef NDEBUG
-            formatCtx_.dumpContainerInfo();
-#endif
-        }
-        
-        /// @return list of opened streams in the output file
-        inline const AVStream* stream() const
-        {
-            assert(formatCtx_ && (formatCtx_->nb_streams == 1) );
-            return formatCtx_->streams[0];
-        }
-        
-        /// Writes a frame to a particular stream.
-        /// @param[in] pFrame frame data to write
-        void write(const AVFrame* pFrame)
-        {
-            assert( formatCtx_ );
-            // send frame to encoder
-            assert( !pFrame || ((pFrame->width == codecCtx_->width) && (pFrame->height == codecCtx_->height) && (pFrame->format == codecCtx_->pix_fmt)) );
+            assert(stream());
+            const avtools::TimeBaseType timebase = stream()->time_base;
+            // Encode frame -> send frame to encoder, then read available packets & mux them.
             int ret = avcodec_send_frame(codecCtx_.get(), pFrame);
             if (ret < 0)
             {
@@ -386,12 +201,7 @@ namespace avtools
                 }
             }
             pkt_.unref();
-            AVStream* pStr = formatCtx_->streams[0];
-            if (AV_NOPTS_VALUE == pStr->start_time) //first frame, set start time
-            {
-                pStr->start_time = pFrame->best_effort_timestamp;
-            }
-            while (true) //write all available packets
+            while (true) //read all available packets from encoder, and mux them
             {
                 ret = avcodec_receive_packet(codecCtx_.get(), pkt_.get());
                 if (ret == AVERROR(EAGAIN))
@@ -406,19 +216,321 @@ namespace avtools
                 {
                     throw MediaError("Error reading packets from encoder", ret);
                 }
-                //Write packet to file
+
                 pkt_->dts = AV_NOPTS_VALUE;  //let the muxer figure this out
                 pkt_->stream_index = 0; //only one output stream
-                pkt_->pts = av_rescale_q(pkt_->pts, codecCtx_->time_base, pStr->time_base);   //this is necessary since writing the header can change the time_base of the stream.
-                pkt_->dts = av_rescale_q(pkt_->dts, codecCtx_->time_base, pStr->time_base);
-                pkt_->duration = av_rescale_q(pkt_->duration, codecCtx_->time_base, pStr->time_base);
-        
+                pkt_->pts = av_rescale_q(pkt_->pts, codecCtx_->time_base, timebase);   //this is necessary since writing the header can change the time_base of the stream.
+                pkt_->duration = av_rescale_q(pkt_->duration, codecCtx_->time_base, timebase);
+                LOG4CXX_DEBUG(logger, "Writing packet:\n " << pkt_.info(1));
                 //mux encoded frame
                 ret = av_interleaved_write_frame(formatCtx_.get(), pkt_.get());
                 if (ret < 0)
                 {
                     throw MediaError("Error muxing packet", ret);
                 }
+            }
+        }
+
+    public:
+
+        Implementation(
+            const std::string& url,
+            Dictionary& codecOpts,
+            Dictionary& muxerOpts
+        ):
+        formatCtx_(FormatContext::OUTPUT),
+        codecCtx_((AVCodec*) nullptr),
+        filtFrame_(),
+        pkt_(),
+        pIn_(avfilter_inout_alloc()),
+        pOut_(avfilter_inout_alloc()),
+        pGraph_( avfilter_graph_alloc() )
+        {
+            // Initialize filtergraph
+            if (!pIn_ || !pOut_)
+            {
+                throw std::runtime_error("Unable to initialize filtergraph inputs");
+            }
+            if ( !pGraph_)
+            {
+                throw std::runtime_error("Unable to initialize filtergraph");
+            }
+
+            //Init output format context, open output file or stream
+            int ret = avformat_alloc_output_context2(&formatCtx_.get(), nullptr, nullptr, url.c_str());
+            if (ret < 0)
+            {
+                throw MediaError("Unable to allocate output context.", ret);
+            }
+
+            //Test that container can store this codec.
+            AVOutputFormat* pOutFormat = formatCtx_->oformat;
+            assert(pOutFormat);
+
+            LOG4CXX_DEBUG(logger, "Attempting to set muxer options:\n" << muxerOpts.as_string());
+            ret = av_opt_set_dict(formatCtx_.get(), &muxerOpts.get());
+            if (0 != ret)
+            {
+                throw MediaError("Unable to set muxer options", ret);
+            }
+            ret = av_opt_set_dict(formatCtx_->priv_data, &muxerOpts.get());
+            if (0 != ret)
+            {
+                throw MediaError("Unable to set private muxer options", ret);
+            }
+#ifndef NDEBUG
+            LOG4CXX_DEBUG(logger, "Unused muxer private options:\n" << muxerOpts.as_string());
+            {
+                avtools::CharBuf buf;
+                ret = av_opt_serialize(formatCtx_.get(), AV_OPT_FLAG_ENCODING_PARAM, 0, &buf.get(), ':', '\n');
+                if (ret < 0)
+                {
+                    throw avtools::MediaError("Unable to serialize muxer options", ret);
+                }
+                LOG4CXX_DEBUG(logger, "Available muxer options:\n" << buf.get());
+                ret = av_opt_serialize(formatCtx_->priv_data, AV_OPT_FLAG_ENCODING_PARAM, 0, &buf.get(), ':', '\n');
+                if (ret < 0)
+                {
+                    throw avtools::MediaError("Unable to serialize muxer private options", ret);
+                }
+                LOG4CXX_DEBUG(logger, "Available muxer private options:\n" << buf.get());
+            }
+#endif
+
+            // Open IO Context for writing to the file
+            if ( !(formatCtx_->flags & AVFMT_NOFILE) )
+            {
+                ret = avio_open(&formatCtx_->pb, url.c_str(), AVIO_FLAG_WRITE);
+                if (ret < 0)
+                {
+                    throw MediaError("Could not open " + url, ret);
+                }
+                assert(formatCtx_->pb);
+            }
+            LOG4CXX_DEBUG(logger, "MediaWriter: Opened output file " << url << " in " << pOutFormat->long_name << " format.");
+            LOG4CXX_DEBUG(logger, "Format context compliance: " << formatCtx_->strict_std_compliance);
+
+            // Find encoder
+            const AVCodecDescriptor* pCodecDesc = nullptr;
+            if (!codecOpts.has("name"))   //none specified, find first compatible codec
+            {
+                while ( (pCodecDesc = avcodec_descriptor_next(pCodecDesc)) )
+                {
+                    if (avformat_query_codec(pOutFormat, pCodecDesc->id, formatCtx_->strict_std_compliance)
+                        && pCodecDesc->type == AVMEDIA_TYPE_VIDEO)
+                    {
+                        LOG4CXX_INFO(logger, "No codec was specified, will use " << pCodecDesc->name);
+                        break;
+                    }
+                }
+                if (!pCodecDesc)
+                {
+                    throw std::runtime_error("Unable to find a suitable codec for " + std::string(pOutFormat->long_name) + " container.");
+                }
+            }
+            else
+            {
+                std::string encoderName = codecOpts["name"];
+                pCodecDesc = avcodec_descriptor_get_by_name(encoderName.c_str());
+                if (!pCodecDesc)
+                {
+                    throw std::runtime_error("Unable to find a descriptor for codec " + encoderName);
+                }
+                ret = avformat_query_codec(pOutFormat, pCodecDesc->id, formatCtx_->strict_std_compliance);
+                if ( ret <= 0 )
+                {
+                    throw MediaError("File format " + std::string(pOutFormat->name) + " is unable to store " + std::string(pCodecDesc->name) + " streams.", ret);
+                }
+                LOG4CXX_DEBUG(logger, "Using " << pCodecDesc->id << " codec.");
+            }
+            codecOpts.add("codec_tag", av_codec_get_tag(pOutFormat->codec_tag, pCodecDesc->id));
+
+            //Initialize codec context
+            LOG4CXX_DEBUG(logger, "MediaWriter will use a " << pOutFormat->name << " container to store " << pCodecDesc->name << " encoded video." );
+            codecCtx_->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;    // let codec know we are using global header
+
+            // Open encoder
+            const AVCodec* pEncoder = avcodec_find_encoder(pCodecDesc->id);
+            if (!pEncoder)
+            {
+                throw MediaError("Cannot find an encoder for " + std::string(pCodecDesc->name));
+            }
+//            int losses = 0;
+//            codecCtx_->pix_fmt = avcodec_find_best_pix_fmt_of_list(pEncoder->pix_fmts, (AVPixelFormat) codecParam->format, false, &losses);
+//            if (codecCtx_->pix_fmt != codecParam->format)
+//            {
+//                LOG4CXX_INFO(logger, "Setting output pixel format to " << codecCtx_->pix_fmt)
+//            }
+
+            // Set the timebase
+            assert(codecOpts.has("time_base"));
+            avtools::TimeBaseType timebase;
+            ret = av_parse_video_rate(&timebase, codecOpts["time_base"].c_str());
+            if ( ret < 0)
+            {
+                throw MediaError("Unable to parse video rate from codec options", ret);
+            }
+            codecCtx_->time_base = timebase;                    // Set timebase
+            LOG4CXX_DEBUG(logger, "Setting time base to " << timebase);
+
+//            av_opt_set_dict(codecCtx_.get(), &codecOpts.get());
+//            av_opt_set_dict(codecCtx_->priv_data, &codecOpts.get());
+            ret = avcodec_open2(codecCtx_.get(), pEncoder, &codecOpts.get());
+            if (ret < 0)
+            {
+                throw MediaError("Unable to open encoder context", ret);
+            }
+            assert( codecCtx_.isOpen() );
+            LOG4CXX_DEBUG(logger, "MediaWriter: Opened encoder for " << codecCtx_.info());
+#ifndef NDEBUG
+            LOG4CXX_DEBUG(logger, "Unused codec options:\n" << codecOpts.as_string());
+            {
+                avtools::CharBuf buf;
+                ret = av_opt_serialize(codecCtx_.get(), AV_OPT_FLAG_ENCODING_PARAM, 0, &buf.get(), ':', '\n');
+                if (ret < 0)
+                {
+                    throw avtools::MediaError("Unable to serialize codec options", ret);
+                }
+                LOG4CXX_DEBUG(logger, "Available codec options:\n" << buf.get());
+                ret = av_opt_serialize(codecCtx_->priv_data, AV_OPT_FLAG_ENCODING_PARAM, 0, &buf.get(), ':', '\n');
+                if (ret < 0)
+                {
+                    throw avtools::MediaError("Unable to serialize private codec options", ret);
+                }
+                LOG4CXX_DEBUG(logger, "Available codec private options:\n" << buf.get());
+            }
+#endif
+
+            // Add stream
+            AVStream* pStr = avformat_new_stream(formatCtx_.get(), pEncoder);
+            if ( !pStr )
+            {
+                throw MediaError("Unable to add stream for " + std::string(pEncoder->name));
+            }
+            //get frame rate
+            AVRational framerate;
+            assert(muxerOpts.has("framerate"));
+            ret = av_parse_video_rate(&framerate, muxerOpts["framerate"].c_str());
+            if (ret < 0)
+            {
+                throw MediaError("Unable to parse frame rate from muxer options", ret);
+            }
+            pStr->avg_frame_rate = framerate;
+            //copy codec params to stream
+            avcodec_parameters_from_context(pStr->codecpar, codecCtx_.get());
+            pStr->time_base = timebase;
+            pStr->start_time = AV_NOPTS_VALUE;
+
+            assert( pStr->codecpar && (pStr->codecpar->codec_id == pCodecDesc->id) && (pStr->codecpar->codec_type == AVMEDIA_TYPE_VIDEO) );
+            assert( (formatCtx_->nb_streams == 1) && (pStr == formatCtx_->streams[0]) );
+            LOG4CXX_DEBUG(logger, "MediaWriter: Opened " << *pStr);
+            // Write stream header
+            ret = avformat_write_header(formatCtx_.get(), nullptr);
+            if (ret < 0)
+            {
+                throw MediaError("Error occurred when writing output stream header.", ret);
+            }
+            LOG4CXX_DEBUG(logger, "MediaWriter: Opened output file " << formatCtx_->url);
+
+            // Initialize output frame
+            filtFrame_ = Frame(pStr->codecpar->width, pStr->codecpar->height, (AVPixelFormat) pStr->codecpar->format);
+#ifndef NDEBUG
+            formatCtx_.dumpContainerInfo();
+#endif
+        }
+
+        /// Dtor
+        ~Implementation()
+        {
+            assert(formatCtx_);
+            try
+            {
+                write(nullptr, TimeBaseType{});
+            }
+            catch (std::exception& err)
+            {
+                LOG4CXX_ERROR(logger, "Error while flushing packets and closing encoder: " << err.what());
+            }
+            //Write trailer
+            int ret = av_write_trailer(formatCtx_.get());
+            if (ret < 0)
+            {
+                LOG4CXX_ERROR(logger, "Error writing trailer: " << av_err2str(ret));
+            }
+            // Close file if output is file
+            if ( formatCtx_->oformat && !(formatCtx_->oformat->flags & AVFMT_NOFILE) )
+            {
+                ret = avio_close(formatCtx_->pb);
+                if (ret < 0)
+                {
+                    LOG4CXX_ERROR(logger, "Error closing output file " << av_err2str(ret));
+                }
+            }
+
+            avfilter_inout_free(&pIn_);
+            avfilter_inout_free(&pOut_);
+            avfilter_graph_free(&pGraph_);
+
+#ifndef NDEBUG
+            formatCtx_.dumpContainerInfo();
+#endif
+        }
+        
+        /// @return list of opened streams in the output file
+        inline const AVStream* stream() const
+        {
+            assert(formatCtx_ && (formatCtx_->nb_streams == 1) );
+            return formatCtx_->streams[0];
+        }
+
+        /// Writes a frame to a particular stream.
+        /// @param[in] pFrame frame data to write
+        /// @param[in] timebase timebase of the incoming frames
+        void write(const AVFrame* pFrame, avtools::TimeBaseType timebase)
+        {
+            assert( formatCtx_ );
+            // send frame to encoder
+            AVStream* pStr = formatCtx_->streams[0];
+            if (pFrame)
+            {
+                if (AV_NOPTS_VALUE == pStr->start_time) //first frame, set start time
+                {
+                    pStr->start_time = pFrame->best_effort_timestamp;
+                    LOG4CXX_DEBUG(logger, "Setting stream start time to " << pStr->start_time);
+                    initFilterGraph(pFrame, timebase);
+                }
+            }
+            else if (AV_NOPTS_VALUE == pStr->start_time)
+            {
+                LOG4CXX_WARN(logger, "Writer flushing with no frames written.");
+                return; //no frames written
+            }
+
+            /// Push frame to filtergraph
+            int ret = av_buffersrc_write_frame(pIn_->filter_ctx, pFrame);
+            if (ret < 0)
+            {
+                throw MediaError("Unable to write frame to filtergraph", ret);
+            }
+
+            /// Pop output frames from filtergraph
+            while (true)
+            {
+                avtools::TimeBaseType outTimebase = av_buffersink_get_time_base(pOut_->filter_ctx);
+                ret = av_buffersink_get_frame(pOut_->filter_ctx, filtFrame_.get());
+                if ( (ret == AVERROR(EAGAIN)) || (ret == AVERROR_EOF) )
+                {
+                    break;
+                }
+                else if (ret < 0)
+                {
+                    throw MediaError("Unable to receive frame from filter graph", ret);
+                }
+                //timestamps should be in terms of the input time_base, convert to output
+                filtFrame_->best_effort_timestamp = av_rescale_q(filtFrame_->best_effort_timestamp, outTimebase, codecCtx_->time_base);
+                filtFrame_->pts = av_rescale_q(filtFrame_->pts, outTimebase, codecCtx_->time_base);
+                //encode frame
+                encodeFrame(filtFrame_.get());
             }
         }
         
@@ -429,62 +541,32 @@ namespace avtools
     //MediaWriter Definitions
     //
     //=====================================================
-
-    MediaWriter::MediaWriter
-    (
-         const std::string& url,
-         const AVCodecParameters& codecParam,
-         const TimeBaseType& timebase
-    ):
-    pImpl_( nullptr )
-    {
-        Dictionary dict;
-        pImpl_ = std::make_unique<Implementation>(url, codecParam, timebase, dict);
-        assert ( pImpl_ );
-    }
-
-    MediaWriter::MediaWriter
-    (
+    MediaWriter::MediaWriter(
         const std::string& url,
-        const AVCodecParameters& codecParam, 
-        const TimeBaseType& timebase,
-        Dictionary& opts
-    ):
-    pImpl_( std::make_unique<Implementation>(url, codecParam, timebase, opts) )
+        Dictionary& codecOpts,
+        Dictionary& muxerOpts
+                             ):
+    pImpl_( std::make_unique<Implementation>(url, codecOpts, muxerOpts) )
     {
-        assert ( pImpl_ );
+        assert( pImpl_);
     }
 
-    MediaWriter::MediaWriter
-    (
-        const std::string& url,
-        const CodecParameters& codecParam,
-        const TimeBaseType& timebase,
-        Dictionary& opts
-    ):
-    pImpl_( std::make_unique<Implementation>(url, codecParam, timebase, opts) )
-    {
-        assert ( pImpl_ );
-    }
-
-    MediaWriter::~MediaWriter()
-    {
-    }
+    MediaWriter::~MediaWriter() = default;
 
     const AVStream* MediaWriter::getStream() const
     {
         assert(pImpl_);
         return pImpl_->stream();
     }
-    
-    void MediaWriter::write(const AVFrame* pFrame)
+
+    void MediaWriter::write(const AVFrame* pFrame, avtools::TimeBaseType timebase)
     {
         assert( pImpl_ );
         try
         {
             if (pFrame)
             {
-                pImpl_->write(pFrame);
+                pImpl_->write(pFrame, timebase);
             }
             else
             {
@@ -497,8 +579,8 @@ namespace avtools
         }
     }
 
-    void MediaWriter::write(const Frame &frame)
+    void MediaWriter::write(const Frame &frame, TimeBaseType timebase)
     {
-        write(frame.get());
+        write(frame.get(), timebase);
     }
 }   //::avtools

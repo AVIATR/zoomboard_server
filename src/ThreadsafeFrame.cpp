@@ -46,13 +46,13 @@ namespace avtools
         int ret;
         if (frm)
         {
-            LOG4CXX_DEBUG(logger, "Updating threadsafe frame with \n" << frm.info(1));
+//            LOG4CXX_DEBUG(logger, "Updating threadsafe frame with \n" << frm.info(1));
             {
                 auto lock = getWriteLock();
                 assert(frm->data[0] && pFrame_->data[0]);
                 if ( (pFrame_->width != frm->width) || (pFrame_->height != frm->height) || (pFrame_->format != frm->format) )
                 {
-                    LOG4CXX_DEBUG(logger, "Converting frame...");
+//                    LOG4CXX_DEBUG(logger, "Converting frame...");
                     pConvCtx_ = sws_getCachedContext(pConvCtx_, frm->width, frm->height, (AVPixelFormat) frm->format, pFrame_->width, pFrame_->height, (AVPixelFormat) pFrame_->format, SWS_LANCZOS | SWS_ACCURATE_RND, nullptr, nullptr, nullptr);
                     ret = sws_scale(pConvCtx_, frm->data, frm->linesize, 0, frm->height, pFrame_->data, pFrame_->linesize);
                     if (ret < 0)
@@ -74,7 +74,7 @@ namespace avtools
                 {
                     throw avtools::MediaError("Error copying frame properties.", ret);
                 }
-                LOG4CXX_DEBUG(logger, "Updated frame info: \n" << info(1));
+//                LOG4CXX_DEBUG(logger, "Updated frame info: \n" << info(1));
             }
         }
         else

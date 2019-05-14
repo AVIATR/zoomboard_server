@@ -105,18 +105,21 @@ namespace avtools
     /// @return a string containing detailed info about the codec context
     std::string getCodecInfo(const AVCodecContext* pCC, int indent=0);
 
-//    /// Prints stream info
-//    /// @param[in] pStr pointer to stream
-//    /// @param[in] indent number of tabs to indent each line of text
-//    /// @return a string containing detailed info about the stream
-//    std::string getBriefStreamInfo(const AVStream* pStr);
-
-//    /// Returns a line of text which includes a summary of a stream
-//    std::string getBriefStreamInfo(const AVStream* pStr);
+    /// Prints stream info
+    /// @param[in] pStr pointer to stream
+    /// @param[in] indent number of tabs to indent each line of text
+    /// @return a string containing detailed info about the stream
+    std::string getStreamInfo(const AVStream* pStr, int indent=0);
 
     /// Return info for a given frame
     /// @param[in] pFrame input frame;
-    /// @param[in] pStr stream that the frame came from
+    /// @param[in] type frame type
+    /// @param[in] indent number of tabs to indent each line of text
+    std::string getFrameInfo(const AVFrame* pFrame, AVMediaType type, int indent=0);
+
+    /// Return info for a given frame
+    /// @param[in] pFrame input frame;
+    /// @param[in] pStr stream that the frame came from. nullptr if unknown
     /// @param[in] indent number of tabs to indent each line of text
     std::string getFrameInfo(const AVFrame* pFrame, const AVStream* pStr, int indent=0);
 } //::avtools

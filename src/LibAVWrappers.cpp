@@ -25,31 +25,17 @@ namespace
     log4cxx::LoggerPtr logger(log4cxx::Logger::getLogger("zoombrd.LibAVWrappers"));
 //    static const int ALIGNMENT = 32;
 
-    /// Prints info re: a video frame
-    /// @param[in] pFrame a video frame. If the frame is not a video frame, the results will be inaccurate
-    /// @param[in] indent number of tabs to indent by
-    /// @return a string containing info re: an audio frame
-    std::string getVideoFrameInfo(const AVFrame* pFrame, int indent)
+    std::string getPacketInfo(const AVPacket* pPkt, int indent)
     {
-        assert(pFrame);
+        assert(pPkt);
         const std::string filler(indent, '\t');
         std::stringstream ss;
-        ss << filler << "Timestamp:" << pFrame->best_effort_timestamp << std::endl;
-        ss << filler << "Picture Format: " << (AVPixelFormat) pFrame->format << std::endl;;
-        ss << filler << "Size (w x h): " << pFrame->width << "x" << pFrame->height << std::endl;
-        ss << filler << "Stride: ";
-        for (int i = 0; (i < AV_NUM_DATA_POINTERS) && (pFrame->linesize[i]); ++i)
-        {
-            ss << pFrame->linesize[i] << " ";
-        }
-        ss << std::endl;
-        ss << filler << "Picture Type:" << pFrame->pict_type << std::endl;
-#ifndef NDEBUG
-        ss << filler << "Data allocated at " << static_cast<void*>(pFrame->data[0]) << std::endl;
-#endif
+        ss << filler << "pts:" << pPkt->pts << std::endl;
+        ss << filler << "dts:" << pPkt->dts << std::endl;
+        ss << filler << "duration:" << pPkt->duration << std::endl;
+        ss << filler << "stream:" << pPkt->stream_index << std::endl;
         return ss.str();
-    };
-    
+    }
 
 } //<anon>
 
@@ -194,15 +180,7 @@ namespace avtools
     std::string Frame::info(int indent/*=0*/) const
     {
         assert(pFrame_);
-        switch (type)
-        {
-            case AVMEDIA_TYPE_VIDEO:
-                return getVideoFrameInfo(pFrame_, indent);
-                break;
-            default:    //may implement other typews in the future
-                LOG4CXX_ERROR(logger, "Information about frames of type " << type << + " are not available.");
-                return "No info available";
-        }
+        return getFrameInfo(pFrame_, type, indent);
     }
 
     // -------------------------------------------------
@@ -255,7 +233,13 @@ namespace avtools
         av_packet_unref(pPkt_);
         pPkt_->stream_index = -1;
     }
-    
+
+    std::string Packet::info(int indent/*=0*/) const
+    {
+        assert(pPkt_);
+        return getPacketInfo(pPkt_, indent);
+    }
+
     // -------------------------------------------------
     // AVDictionary wrapper
     // -------------------------------------------------
@@ -291,7 +275,7 @@ namespace avtools
         }
     }
     
-    void Dictionary::add(const std::string& key, std::int64_t value)
+    void Dictionary::add(const std::string& key, TimeType value)
     {
         int ret = av_dict_set_int(&pDict_, key.c_str(), value, 0);
         if (ret < 0)
@@ -299,8 +283,26 @@ namespace avtools
             throw MediaError("Unable to add key " + key + " to dictionary", ret);
         }
     }
-    
-    std::string Dictionary::at(const std::string& key) const
+
+    void Dictionary::add(const std::string& key, AVRational value)
+    {
+        int ret = av_dict_set(&pDict_, key.c_str(), std::to_string(value).c_str(), 0);
+        if (ret < 0)
+        {
+            throw MediaError("Unable to add key " + key + " to dictionary", ret);
+        }
+    }
+
+    void Dictionary::add(const std::string& key, AVPixelFormat value)
+    {
+        int ret = av_dict_set(&pDict_, key.c_str(), std::to_string(value).c_str(), 0);
+        if (ret < 0)
+        {
+            throw MediaError("Unable to add key " + key + " to dictionary", ret);
+        }
+    }
+
+    std::string Dictionary::operator[](const std::string& key) const
     {
         assert(pDict_);
         AVDictionaryEntry *pEntry = av_dict_get(pDict_, key.c_str(), nullptr, 0);
@@ -309,11 +311,6 @@ namespace avtools
             throw std::out_of_range("Key " + key + " not found in dictionary.");
         }
         return pEntry->value;
-    }
-    
-    std::string Dictionary::operator[](const std::string& key) const
-    {
-        return at(key);
     }
     
     bool Dictionary::has(const std::string &key) const
@@ -352,24 +349,27 @@ namespace avtools
     CodecContext(pCodecCtx ? pCodecCtx->codec : (AVCodec*) nullptr)
     {
         assert(pCC_);
-        CodecParameters param;
-        int ret = avcodec_parameters_from_context(param.get(), pCodecCtx);
-        if (ret < 0)
+        if (pCodecCtx)
         {
-            if (pCC_)
+            CodecParameters param;
+            int ret = avcodec_parameters_from_context(param.get(), pCodecCtx);
+            if (ret < 0)
             {
-                avcodec_free_context(&pCC_);
+                if (pCC_)
+                {
+                    avcodec_free_context(&pCC_);
+                }
+                throw MediaError("CodecContext: Unable to clone codec context", ret);
             }
-            throw MediaError("CodecContext: Unable to clone codec context", ret);
-        }
-        ret = avcodec_parameters_to_context(pCC_, param.get());
-        if (ret < 0)
-        {
-            if (pCC_)
+            ret = avcodec_parameters_to_context(pCC_, param.get());
+            if (ret < 0)
             {
-                avcodec_free_context(&pCC_);
+                if (pCC_)
+                {
+                    avcodec_free_context(&pCC_);
+                }
+                throw MediaError("CodecContext: Unable to clone codec context", ret);
             }
-            throw MediaError("CodecContext: Unable to clone codec context", ret);
         }
     }
 

@@ -36,7 +36,8 @@ namespace avtools
         /// @param[in] url url of media file to open
         /// @param[in] type whether the input is a file or a capture device
         /// @throw std::runtime_exception if there was an error opening the stream.
-        MediaReader(const std::string& url, InputMediaType type=FILE);
+        [[deprecated]]
+        MediaReader(const std::string& url, InputMediaType type);
 
         /// More general ctor
         /// @param[in] url url of media file to open
@@ -44,8 +45,11 @@ namespace avtools
         /// @param[in] type whether the input is a file or a capture device
         /// On return, this dictionary should contain the actual values used in opening.
         /// @throw std::runtime_exception if there was an error opening the stream.
-        MediaReader(const std::string& url, Dictionary& opts, InputMediaType type=FILE);
-        
+        [[deprecated]]
+        MediaReader(const std::string& url, Dictionary& opts, InputMediaType type);
+
+        MediaReader(const std::string& url, Dictionary& opts);
+
         /// Dtor
         ~MediaReader();
         

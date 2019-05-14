@@ -16,6 +16,7 @@
 
 extern "C" {
 #include <libavformat/avformat.h>
+#include <libavformat/avio.h>
 #include <libavcodec/avcodec.h>
 #include <libavutil/pixdesc.h>
 #include <libavutil/frame.h>
@@ -57,7 +58,7 @@ namespace avtools
     {
     private:
         FormatContext               formatCtx_;        ///< Format I/O context
-        CodecContext                codexCtx_;         ///< codec context for the video codec context of opened stream
+        CodecContext                codecCtx_;         ///< codec context for the video codec context of opened stream
         Packet                      pkt_;              ///< packet to be used for reading from file
         int                         stream_;           ///< Index of the opened video stream
 
@@ -65,19 +66,52 @@ namespace avtools
         /// Ctor
         /// @param[in] url url or filename to open
         /// @param[in] pFmt ptr to input format. If none is provided, it is guessed from the url
-        /// @param[in] pDict pointer to a ddictionary that has entries used for opening the url, such as framerate.
-        Implementation(const std::string& url, AVInputFormat* pFmt, AVDictionary*& pDict):
+        /// @param[in] opts a ddictionary that has entries used for opening the url, such as framerate.
+        Implementation(const std::string& url, avtools::Dictionary& muxerOpts):
         formatCtx_(FormatContext::INPUT),
-        codexCtx_((AVCodec*) nullptr),
+        codecCtx_((AVCodec*) nullptr),
         pkt_(),
         stream_(-1)
         {
-            //        av_register_all();          // Register codecs - his is deprecated for ffmpeg >4.0
-            int ret = avformat_open_input( &formatCtx_.get(), url.c_str(), pFmt, &pDict );
+            avdevice_register_all();
+            AVInputFormat* pFormat = nullptr;
+            if (muxerOpts.has("name"))
+            {
+                const std::string demuxer = muxerOpts["name"];
+                pFormat = av_find_input_format(demuxer.c_str());
+                if (!pFormat)
+                {
+                    throw MediaError("Cannot determine input format for " + demuxer);
+                }
+            }
+            LOG4CXX_DEBUG(logger, "Opening " << pFormat->long_name );
+
+            int ret = avformat_open_input( &formatCtx_.get(), url.c_str(), pFormat, &muxerOpts.get() );
             if( ret < 0 )  // Couldn't open file
             {
                 throw MediaError("Could not open " + url, ret);
             }
+#ifndef NDEBUG
+            LOG4CXX_DEBUG(logger, "Unused demuxer options:\n" << muxerOpts.as_string());
+            {
+                avtools::CharBuf buf;
+                ret = av_opt_serialize(formatCtx_.get(), AV_OPT_FLAG_DECODING_PARAM, 0, &buf.get(), ':', '\n');
+                if (ret < 0)
+                {
+                    throw avtools::MediaError("Unable to serialize demuxer options", ret);
+                }
+                LOG4CXX_DEBUG(logger, "Available demuxer options:\n" << buf.get());
+            }
+            {
+                avtools::CharBuf buf;
+                ret = av_opt_serialize(formatCtx_->priv_data, AV_OPT_FLAG_DECODING_PARAM, 0, &buf.get(), ':', '\n');
+                if (ret < 0)
+                {
+                    throw avtools::MediaError("Unable to serialize private demuxer options", ret);
+                }
+                LOG4CXX_DEBUG(logger, "Available private demuxer options:\n" << buf.get());
+            }
+#endif
 
             // Retrieve stream information
             ret = avformat_find_stream_info(formatCtx_.get(), nullptr);
@@ -106,20 +140,42 @@ namespace avtools
                 {
                     throw MediaError("Unable to find decoder for " + std::to_string(id));
                 }
-                int ret = avcodec_parameters_to_context(codexCtx_.get(), pStream->codecpar);
+                int ret = avcodec_parameters_to_context(codecCtx_.get(), pStream->codecpar);
                 if (ret < 0)
                 {
-                    throw MediaError("Unable to initialize codec context " , ret);
+                    throw MediaError("Unable to initialize decoder context " , ret);
                 }
 
                 Dictionary codecOpts;
                 codecOpts.add("refcounted_frames", 1);
-                ret = avcodec_open2(codexCtx_.get(), pCodec, &codecOpts.get());
+                ret = avcodec_open2(codecCtx_.get(), pCodec, &codecOpts.get());
                 if (ret < 0)
                 {
-                    throw MediaError("Unable to open decoding codec" , ret);
+                    throw MediaError("Unable to open decoder" , ret);
                 }
-                codexCtx_->time_base = pStream->time_base;
+                codecCtx_->time_base = pStream->time_base;
+#ifndef NDEBUG
+                LOG4CXX_DEBUG(logger, "Unused decoder options: " << codecOpts.as_string());
+                {
+                    avtools::CharBuf buf;
+                    ret = av_opt_serialize(codecCtx_.get(), AV_OPT_FLAG_DECODING_PARAM, 0, &buf.get(), ':', '\n');
+                    if (ret < 0)
+                    {
+                        throw avtools::MediaError("Unable to serialize decoder options", ret);
+                    }
+                    LOG4CXX_DEBUG(logger, "Available decoder options:\n" << buf.get());
+                }
+                LOG4CXX_DEBUG(logger, "Unused decoder private options: " << codecOpts.as_string());
+                {
+                    avtools::CharBuf buf;
+                    ret = av_opt_serialize(codecCtx_->priv_data, AV_OPT_FLAG_DECODING_PARAM, 0, &buf.get(), ':', '\n');
+                    if (ret < 0)
+                    {
+                        throw avtools::MediaError("Unable to serialize decoder private options", ret);
+                    }
+                    LOG4CXX_DEBUG(logger, "Available decoder private options:\n" << buf.get());
+                }
+#endif
 
                 LOG4CXX_DEBUG(logger, "MediaReader: Opened decoder for stream:\n" << *pStream);
                 stream_ = i;
@@ -129,35 +185,6 @@ namespace avtools
             {
                 throw MediaError("Unable to open any video streams");
             }
-        }
-
-        static std::unique_ptr<Implementation> OpenFile(const std::string& url, Dictionary& dict)
-        {
-            avdevice_register_all();    // Register devices
-            return std::make_unique<Implementation>(url, nullptr, dict.get());
-        }
-
-        static std::unique_ptr<Implementation> OpenFile(const std::string& url)
-        {
-            Dictionary tmp;
-            return OpenFile(url, tmp);
-        }
-
-        static std::unique_ptr<Implementation> OpenStream(const std::string& url, Dictionary& dict)
-        {
-            avdevice_register_all();    // Register devices
-            AVInputFormat *pFormat = av_find_input_format(INPUT_DRIVER.c_str());
-            if (!pFormat)
-            {
-                throw MediaError("Cannot determine input format for " + INPUT_DRIVER);
-            }
-            return std::make_unique<Implementation>(url, pFormat, dict.get());
-        }
-
-        static std::unique_ptr<Implementation> OpenStream(const std::string& url)
-        {
-            Dictionary tmp;
-            return OpenStream(url, tmp);
         }
 
         /// @return a list of opened streams
@@ -200,7 +227,7 @@ namespace avtools
                     return read(frame);
                 }
                 //Valid packet & decoder - send packet to decoder
-                ret = avcodec_send_packet(codexCtx_.get(), pkt_.get());
+                ret = avcodec_send_packet(codecCtx_.get(), pkt_.get());
                 if (ret < 0)
                 {
                     throw MediaError("Unable to decode packet", ret);
@@ -208,7 +235,7 @@ namespace avtools
             }
             // Receive decoded frame if available
             assert (stream == stream_);
-            ret = avcodec_receive_frame(codexCtx_.get(), frame.get());
+            ret = avcodec_receive_frame(codecCtx_.get(), frame.get());
             switch (ret)
             {
                 case 0:
@@ -237,28 +264,11 @@ namespace avtools
     // MediaReader Definitions
     //
     //==========================================
-    
-    MediaReader::MediaReader(const std::string& url, InputMediaType type/*=InputType::FILE*/) try:
-    pImpl_( type == InputMediaType::FILE ? Implementation::OpenFile(url) : Implementation::OpenStream(url) )
+
+    MediaReader::MediaReader(const std::string& url, Dictionary& opts):
+    pImpl_( new Implementation(url, opts) )
     {
-        assert (pImpl_);
-        LOG4CXX_DEBUG(logger, "Opened video stream:" << *getVideoStream());
-    }
-    catch (std::exception& err)
-    {
-        std::throw_with_nested( MediaError("MediaReader: Unable to open " + url) );
-    }
-    
-    MediaReader::MediaReader(const std::string& url, Dictionary& dict, InputMediaType type/*=InputType::FILE*/) try:
-    pImpl_( type == InputMediaType::FILE ? Implementation::OpenFile(url, dict) : Implementation::OpenStream(url, dict))
-    {
-        assert (pImpl_);
-        LOG4CXX_DEBUG(logger, "Opened video stream:" << *getVideoStream());
-        LOG4CXX_DEBUG(logger, "Unused options while opening MediaReader:\n" << dict.as_string());
-    }
-    catch (std::exception& err)
-    {
-        std::throw_with_nested( MediaError("MediaReader: Unable to open " + url) );
+        assert( pImpl_ );
     }
 
     MediaReader::~MediaReader() = default;

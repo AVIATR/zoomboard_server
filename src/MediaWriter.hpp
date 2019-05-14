@@ -24,46 +24,25 @@ namespace avtools
     class MediaWriter
     {
     public:
-        
-        /// Ctor that opens a stream
-        /// @param[in] url stream URL
-        /// @param[in] codecParam video codec parameters
-        /// @param[in] timebase timebase for the video stream
-        /// @throw StreamError if stream cannot be opened for writing
-        [[deprecated]]
-        MediaWriter(
-            const std::string& url,
-            const AVCodecParameters& codecParam,
-            const TimeBaseType& timebase
-        );
 
         /// Ctor that opens a stream
         /// @param[in] url stream URL
         /// @param[in] codecParam video codec parameters
         /// @param[in] timebase timebase for the video stream
-        /// @param[in] opts a dictionary with optional stream parameters. After construction, the used entries are
-        /// consumed and only the unused entries remain
+        /// @param[in] opts a dictionary with optional stream & codec
         /// @throw StreamError if stream cannot be opened for writing
         [[deprecated]]
-        MediaWriter(
-            const std::string& url, 
-            const AVCodecParameters& codecParam, 
-            const TimeBaseType& timebase,
-            Dictionary& opts
-        );
-
-        /// Ctor that opens a stream
-        /// @param[in] url stream URL
-        /// @param[in] codecParam video codec parameters
-        /// @param[in] timebase timebase for the video stream
-        /// @param[in] opts a dictionary with optional stream parameters. After construction, the used entries are
-        /// consumed and only the unused entries remain
-        /// @throw StreamError if stream cannot be opened for writing
         MediaWriter(
             const std::string& url,
             const CodecParameters& codecParam,
             const TimeBaseType& timebase,
             Dictionary& opts
+        );
+
+        MediaWriter(
+            const std::string& url,
+            Dictionary& codecOpts,
+            Dictionary& muxerOpts
         );
 
         ///Dtor
@@ -74,11 +53,13 @@ namespace avtools
         
         /// Writes a video frame to the stream. Write nullptr to close the stream
         /// @param[in] pFrame frame data to write
-        void write( const AVFrame* pFrame);
+        /// @param[in] timebase for the incoming frames
+        void write(const AVFrame* pFrame, TimeBaseType timebase);
 
         /// Writes a video frame to the stream. Write nullptr to close the stream
-        /// @param[in] pFrame frame data to write
-        void write( const Frame& frame);
+        /// @param[in] Frame frame data to write
+        /// @param[in] timebase for the incoming frames
+        void write(const Frame& frame, TimeBaseType timebase);
 
     private:
         class Implementation;                       ///< implementation class

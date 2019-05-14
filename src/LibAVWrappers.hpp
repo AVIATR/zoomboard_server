@@ -11,9 +11,11 @@
 #define LibAVWrappers_hpp
 
 #include <string>
+#include "Media.hpp"
 extern "C" {
 #include <libavformat/avformat.h>
 #include <libavutil/pixdesc.h>
+#include <libavutil/parseutils.h>
 }
 
 struct AVPacket;
@@ -147,6 +149,11 @@ namespace avtools
 
         /// Unreferences the data buffers references by the packet
         void unref();
+
+        /// Provides information re: the packet
+        /// @param[in] indent number of tabs to indent the returned string with
+        /// @return an informational string re: the packet's contents
+        std::string info(int indent=0) const;
     };  //avtools::Packet
     
     /// @class Wrapper around AVDictionary
@@ -185,13 +192,26 @@ namespace avtools
         /// @param[in] key new key to add
         /// @param[in] value value of the key
         /// @throw std::runtime_error if there was an error adding the key
-        void add(const std::string& key, std::int64_t value);
-        
+        void add(const std::string& key, TimeType value);
+
+        /// Adds a key/value pair to the dictionary
+        /// @param[in] key new key to add
+        /// @param[in] value value of the key
+        /// @throw std::runtime_error if there was an error adding the key
+        void add(const std::string& key, TimeBaseType value);
+
+        /// Adds a key/value pair to the dictionary
+        /// @param[in] key new key to add
+        /// @param[in] value value of the key
+        /// @throw std::runtime_error if there was an error adding the key
+        void add(const std::string& key, AVPixelFormat value);
+
         /// Returns the value of a key in the dictionary.
         /// @param[in] key key to search for
         /// @return value of the key
         /// @throw std::runtime_error if there was an error retrieving the value
-        std::string at(const std::string& key) const;
+        template<typename T>
+        T at(const std::string& key) const;
         
         /// Returns the value of a key in the dictionary.
         /// @param[in] key key to search for
@@ -380,7 +400,7 @@ namespace avtools
         /// @param[in] n length of buffer
         inline CharBuf(size_t n): p_((char*) av_malloc_array(n, sizeof(char))) {}
         inline CharBuf(const CharBuf& cb): p_(av_strdup(cb.get())) {};
-        inline ~CharBuf() {if (p_) av_free(p_);}    ///< Dtor
+        inline ~CharBuf() {if (p_) av_freep(&p_);}    ///< Dtor
         inline char*& get() {return p_;}            ///< @return a reference to the underlying ptr
         inline const char* get() const {return p_;} ///< @return the underlying ptr
         /// @return true if the underlying ptr is non-null
@@ -426,6 +446,67 @@ namespace avtools
         void convert(const Frame& inFrame, Frame& outFrame);
 
     };  // avtools::ImageConversionContext
+
+    // Template definitions for Dictionary
+
+    /// Retrieve value at the key as an integer
+    /// @param[in] key dictionary key
+    /// @return the value for the given key as an integer
+    /// @throw runtime_error if there is a problem retrieving the value or parsing it (they are internally stored as strings)
+    template<>
+    inline int Dictionary::at<int>(const std::string& key) const
+    {
+        return std::stoi(this->operator[](key));
+    }
+
+    /// Retrieve value at the key as a string, same as [key]
+    /// @param[in] key dictionary key
+    /// @return the value for the given key as a string
+    /// @throw runtime_error if there is a problem retrieving the value
+    template<>
+    inline std::string Dictionary::at<std::string>(const std::string& key) const
+    {
+        return this->operator[](key);
+    }
+
+    template<>
+    inline TimeType Dictionary::at<TimeType>(const std::string& key) const
+    {
+        return std::stol(this->operator[](key));
+    }
+
+    template<>
+    inline AVRational Dictionary::at<AVRational>(const std::string& key) const
+    {
+        std::string value = this->operator[](key);
+        TimeBaseType parsedVal;
+        int ret = av_parse_video_rate(&parsedVal, value.c_str());
+        if (ret < 0)
+        {
+            throw MediaError("Unable to parse " + value + " to a rational number", ret);
+        }
+        return parsedVal;
+    }
+
+    template<>
+    inline std::pair<int,int> Dictionary::at<std::pair<int,int>>(const std::string& key) const
+    {
+        std::string value = this->operator[](key);
+        std::pair<int,int> parsedVal;
+        int ret = av_parse_video_size(&parsedVal.first, &parsedVal.second, key.c_str());
+        if (ret < 0)
+        {
+            throw MediaError("Unable to parse " + value + " to a pair if integers separated by x", ret);
+        }
+        return parsedVal;
+    }
+
+    template<>
+    inline AVPixelFormat Dictionary::at<AVPixelFormat>(const std::string& key) const
+    {
+        return av_get_pix_fmt(this->operator[](key).c_str());
+    }
+
 
 } //::avtools
 

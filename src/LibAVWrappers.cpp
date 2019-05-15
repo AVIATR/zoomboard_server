@@ -59,7 +59,7 @@ namespace avtools
         {
             throw MediaError("Error allocating data buffers for video frame", ret);
         }
-        LOG4CXX_DEBUG(logger, "Allocated frame data at " << static_cast<void*>(pFrame->data[0]) << " with linesize = " << pFrame->linesize[0]);
+        LOG4CXX_DEBUG(logger, "Initialized frame data at " << static_cast<void*>(pFrame->data[0]) << " with linesize = " << pFrame->linesize[0]);
     }
 
     // -------------------------------------------------
@@ -140,17 +140,24 @@ namespace avtools
     Frame Frame::clone() const
     {
         Frame out(pFrame_->width, pFrame_->height, (AVPixelFormat) pFrame_->format, pFrame_->colorspace);
-        int ret = av_frame_copy_props(out.pFrame_, pFrame_);
+        clone(out);
+        return out;
+    }
+
+    void Frame::clone(Frame& frame) const
+    {
+        assert(frame);
+        assert ( (frame->width == pFrame_->width) && (frame->height == pFrame_->height) && (frame->format == pFrame_->format) && (frame->colorspace == pFrame_->colorspace) );
+        int ret = av_frame_copy_props(frame.get(), pFrame_);
         if (ret < 0)
         {
             throw MediaError("Unable to copy frame properties to cloned frame", ret);
         }
-        ret = av_frame_copy(out.pFrame_, pFrame_);
+        ret = av_frame_copy(frame.get(), pFrame_);
         if (ret < 0)
         {
             throw MediaError("Unable to copy frame data to cloned frame", ret);
         }
-        return out;
     }
 
     Frame::~Frame()

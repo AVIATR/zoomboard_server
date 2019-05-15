@@ -105,6 +105,10 @@ namespace avtools
         /// @return a new frame that has the same data and metadata as this one
         Frame clone() const;
 
+        /// Clone operator for a pre-allocated frame
+        /// @param[in] frame preallocated frame that has the same dimensions, format & colorspace as this frNE
+        void clone(Frame& frame) const;
+
         /// Provides a brief information string regarding the underlying frame.
         /// @param[in] indent number of indentation tabs in the returned string
         /// @return a string with information about the frame.

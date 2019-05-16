@@ -23,7 +23,9 @@
 #include <boost/property_tree/ptree.hpp>
 #include <boost/property_tree/json_parser.hpp>
 #include <boost/filesystem.hpp>
-#include <opencv2/opencv.hpp>
+#include "opencv2/core.hpp"
+#include "opencv2/imgproc.hpp"
+#include "opencv2/highgui.hpp"
 extern "C" {
 #include <libavformat/avformat.h>
 #include <libavcodec/avcodec.h>
@@ -54,7 +56,6 @@ namespace
                 << "\ncodec options:\n" << opts.codecOpts.as_string() << "\n"
                 << "\nmuxer options:\n" << opts.muxerOpts.as_string() );
     }
-
 
     /// Parses a json file to retrieve the output configuration to use
     /// @param[in] configFile name of configuration file to read
@@ -194,7 +195,8 @@ int main(int argc, const char * argv[])
     }
 
     Options inOpts = getOptions(configFile, "input");
-    Options outOpts = getOptions(configFile, "output");
+    Options outOptsLR = getOptions(configFile, "output_lr");
+    Options outOptsHR = getOptions(configFile, "output_hr");
 
     // -----------
     // Open the reader and start the thread to read frames
@@ -217,11 +219,15 @@ int main(int argc, const char * argv[])
     // -----------
     // Open the writer
     // -----------
-    LOG4CXX_DEBUG(logger, "Output options are:\n" << outOpts << "\nOpening writer.");
-    //add output time base
-    outOpts.codecOpts.add("time_base", std::to_string( pVidStr->time_base ));
-    avtools::MediaWriter writer(outOpts.url, outOpts.codecOpts, outOpts.muxerOpts);
-    const AVStream* pOutStr = writer.getStream();
+    LOG4CXX_DEBUG(logger, "LR Output options are:\n" << outOptsLR << "\nOpening low-res writer.");
+    outOptsLR.codecOpts.add("time_base", std::to_string( pVidStr->time_base ));
+    avtools::MediaWriter writerLR(outOptsLR.url, outOptsLR.codecOpts, outOptsLR.muxerOpts);
+    const AVStream* pOutStrLR = writerLR.getStream();
+
+    LOG4CXX_DEBUG(logger, "HR Output options are:\n" << outOptsHR << "\nOpening hi-res writer.");
+    outOptsHR.codecOpts.add("time_base", std::to_string( pVidStr->time_base ));
+    avtools::MediaWriter writerHR(outOptsHR.url, outOptsHR.codecOpts, outOptsHR.muxerOpts);
+    const AVStream* pOutStrHR = writerHR.getStream();
 
     // -----------
     // Start warping & writing
@@ -232,8 +238,10 @@ int main(int argc, const char * argv[])
     std::thread warperThread = threadedWarp(pInFrame, pTrfFrame, trfMatrix);
 
     // Start the writer thread
-    LOG4CXX_DEBUG(logger, "Output stream info:\n" << avtools::getStreamInfo(pOutStr));
-    std::thread writerThread = threadedWrite(pTrfFrame, writer, pVidStr->time_base);
+    LOG4CXX_DEBUG(logger, "Lo-res output stream info:\n" << avtools::getStreamInfo(pOutStrLR));
+    std::thread writerThreadLR = threadedWrite(pTrfFrame, writerLR, pVidStr->time_base);
+    LOG4CXX_DEBUG(logger, "Hi-res output stream info:\n" << avtools::getStreamInfo(pOutStrHR));
+    std::thread writerThreadHR = threadedWrite(pTrfFrame, writerHR, pVidStr->time_base);
 
     std::cout << "press Ctrl+C to exit...";
 
@@ -242,8 +250,8 @@ int main(int argc, const char * argv[])
     // -----------
     readerThread.join();    //wait for reader thread to finish
     warperThread.join();    //wait for the warper thread to finish
-    writerThread.join();    //wait for writer to finish
-
+    writerThreadLR.join();    //wait for writer to finish
+    writerThreadHR.join();    //wait for writer to finish
 
     if (g_Status.hasExceptions())
     {

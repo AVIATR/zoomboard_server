@@ -12,7 +12,6 @@
 #include "log4cxx/logger.h"
 #include <memory>
 #include <stdexcept>
-//#include <iostream>
 
 extern "C" {
 #include <libavformat/avformat.h>
@@ -78,6 +77,7 @@ namespace avtools
             if (muxerOpts.has("name"))
             {
                 const std::string demuxer = muxerOpts["name"];
+                assert(!demuxer.empty());
                 pFormat = av_find_input_format(demuxer.c_str());
                 if (!pFormat)
                 {
@@ -86,6 +86,7 @@ namespace avtools
             }
             LOG4CXX_DEBUG(logger, "Opening " << pFormat->long_name );
 
+            assert(formatCtx_ && muxerOpts);
             int ret = avformat_open_input( &formatCtx_.get(), url.c_str(), pFormat, &muxerOpts.get() );
             if( ret < 0 )  // Couldn't open file
             {

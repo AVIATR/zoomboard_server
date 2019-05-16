@@ -14,23 +14,67 @@
             "skip_frame": "1"
         }
     },
-    "output":
+    "output_lr":
     {
         "url": "stream_lr.m3u8",
         "muxer_options":
         {
-            "framerate": "5/1",
+            "framerate": "30/1",
             "strict": "normal",
             "hls_time": "0.1",
             "hls_allow_cache": "0",
-            "hls_flags": "+temp_file+delete_segments",
-            "hls_list_size": "15",
+            "hls_flags": "temp_file+delete_segments",
+            "hls_list_size": "10",
             "hls_delete_threshold": "1"
         },
         "codec_options": 
         {
             "name": "h264",
             "video_size": "384x216",
+            "pixel_format": "yuv422p",
+            "b" : "512000",
+            "bit_rate_tolerance": "0",
+            "rc_max_rate": "0",
+            "rc_buffer_size": "0",
+            "gop_size": "0",
+            "flags": "+cgop",
+            "g": "1",
+            "max_b_frames": "0",
+            "me_cmp": "1",
+            "me_range": "16",
+            "subq": "5",
+            "qmin": "10",
+            "qmax": "21",
+            "qcomp": "0.6",
+            "i_qfactor": "0.71",
+            "max_qdiff": "4",
+            "b_strategy": "1",
+            "has_b_frames": "0",
+            "coder_type": "1",
+            "sc_threshold": "40",
+            "strict": "normal",
+            "profile": "high422",
+            "preset": "ultrafast",
+            "tune": "zerolatency"
+        }
+    },
+    "output_hr":
+    {
+        "url": "stream_hr.m3u8",
+        "muxer_options":
+        {
+            "framerate": "1/1",
+            "strict": "normal",
+            "hls_time": "2.0",
+            "hls_allow_cache": "0",
+            "hls_flags": "temp_file+delete_segments",
+            "hls_list_size": "3",
+            "hls_delete_threshold": "1"
+        },
+        "codec_options": 
+        {
+            "name": "h264",
+            "video_size": "848x480",
             "pixel_format": "yuv422p",
             "b" : "512000",
             "bit_rate_tolerance": "0",

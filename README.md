@@ -20,6 +20,8 @@ An overview of the LibAV read/write process can be found in the documentation.
 ### X264 Settings
 We are using libx264 for encoding. The presets and how they correspond to various codec parameters can be found [here](http://dev.beandog.org/x264_preset_reference.html). If you have the `x264` binary installed, you can also see the installed presets by `x264 --fullhelp`. Some more information about the tuning and presets is given [here](https://trac.ffmpeg.org/wiki/Encode/H.264).
 
+Specific parameters can also be found for ffmpeg [here](https://ffmpeg.org/ffmpeg-codecs.html#libx264_002c-libx264rgb), and some more details about the parameters is also given [here](https://sites.google.com/site/linuxencoding/x264-ffmpeg-mapping)
+
 
 ### Further reading about libav and transcoding:
 Here are some useful links that were very helpful during the development of this software:
@@ -35,6 +37,16 @@ The full set of muxer, codec and x264 private codec options can be found by exam
 * Muxer Options: https://github.com/FFmpeg/FFmpeg/blob/master/libavformat/options_table.h
 * Codec Options: https://github.com/FFmpeg/FFmpeg/blob/master/libavcodec/options_table.h
 * x264 Private Options: https://github.com/FFmpeg/FFmpeg/blob/master/libavcodec/libx264.c
+
+To minimize delay, we are not using any B frames. More information about the group of frames structure and the frame types can be found at [1](https://en.wikipedia.org/wiki/Group_of_pictures), [2](https://en.wikipedia.org/wiki/Inter_frame), [3](https://en.wikipedia.org/wiki/Intra-frame_coding).
+
+We also use CRF encoding for the high-rate stream, and constant QP encoding for the low-rate stream. To learn more about these, see [here](https://slhck.info/video/2017/02/24/crf-guide.html)
+
+### Debugging
+To explore the frame information & group of frames structure, use ffprobe.
+* For detailed frame info: `ffprobe -show_frames <stream.m3u8>`
+* For compact info re: frame type, timestamps etc: `ffprobe -show_entries frame=key_frame,pict_type,best_effort_timestamp_time -of compact <stream.m3u8>`
+and replace `<stream.m3u8>` with the name of the particular output stream playlist.
 
 ### Discovered demuxer and decoder options using intergrated camera & avfoundation:
 #### Demuxer options

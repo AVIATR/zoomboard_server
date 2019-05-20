@@ -220,12 +220,10 @@ int main(int argc, const char * argv[])
     // Open the writer
     // -----------
     LOG4CXX_DEBUG(logger, "LR Output options are:\n" << outOptsLR << "\nOpening low-res writer.");
-    outOptsLR.codecOpts.add("time_base", std::to_string( pVidStr->time_base ));
     avtools::MediaWriter writerLR(outOptsLR.url, outOptsLR.codecOpts, outOptsLR.muxerOpts);
     const AVStream* pOutStrLR = writerLR.getStream();
 
     LOG4CXX_DEBUG(logger, "HR Output options are:\n" << outOptsHR << "\nOpening hi-res writer.");
-    outOptsHR.codecOpts.add("time_base", std::to_string( pVidStr->time_base ));
     avtools::MediaWriter writerHR(outOptsHR.url, outOptsHR.codecOpts, outOptsHR.muxerOpts);
     const AVStream* pOutStrHR = writerHR.getStream();
 

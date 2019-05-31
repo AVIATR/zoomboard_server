@@ -41,6 +41,8 @@ extern "C" {
 using avtools::MediaError;
 namespace
 {
+    namespace bfs = ::boost::filesystem;
+
     /// @class A structure containing the pertinent ffmpeg options
     /// See https://www.ffmpeg.org/ffmpeg-devices.html for the list of codec & stream options
     struct Options
@@ -53,7 +55,7 @@ namespace
     inline std::ostream& operator<<(std::ostream& stream, const Options& opts)
     {
         return ( stream << "url:" << opts.url
-                << "\ncodec options:\n" << opts.codecOpts.as_string() << "\n"
+                << "\ncodec options:\n" << opts.codecOpts.as_string()
                 << "\nmuxer options:\n" << opts.muxerOpts.as_string() );
     }
 
@@ -62,6 +64,11 @@ namespace
     /// @return output options to use for the writer
     /// @throw std::runtime_error if there is an issue parsing the configuration file.
     Options getOptions(const std::string& configFile, const std::string& type);
+
+    /// Removes all files with a given prefix
+    /// @param[in] prefix file prefix
+    /// @param[in] path path to search
+    void removeFiles(const std::string& prefix, const bfs::path& path=".");
 
     /// @class Synchronization thread to signal end and capture exceptions from threads
     class ProgramStatus
@@ -157,6 +164,8 @@ int main(int argc, const char * argv[])
 {
     // Set up signal handler to end program
     std::signal( SIGINT, [](int){g_Status.end();} );
+    std::cout << "press Ctrl+C to exit..." << std::endl;
+
 
     // Set up logger. See https://logging.apache.org/log4cxx/latest_stable/usage.html for more info,
     //see https://logging.apache.org/log4cxx/latest_stable/apidocs/classlog4cxx_1_1_pattern_layout.html for patterns
@@ -187,7 +196,7 @@ int main(int argc, const char * argv[])
     }
     const std::string configFile = argv[1];
     //Until we convert to C++17, we need to use boost::filesystem to check for file. Afterwards, we can use std::filesystem
-    if ( !boost::filesystem::exists( configFile ) )
+    if ( !bfs::exists( configFile ) )
     {
         LOG4CXX_FATAL(logger, "Configuration file " << configFile << " does not exist." << USAGE);
         return EXIT_FAILURE;
@@ -196,6 +205,10 @@ int main(int argc, const char * argv[])
     Options inOpts = getOptions(configFile, "input");
     Options outOptsLR = getOptions(configFile, "output_lr");
     Options outOptsHR = getOptions(configFile, "output_hr");
+    // Remove old stream files if they're around
+    removeFiles(bfs::path(outOptsLR.url).stem().string());
+    removeFiles(bfs::path(outOptsHR.url).stem().string());
+
 
     // -----------
     // Open the reader and start the thread to read frames
@@ -239,8 +252,6 @@ int main(int argc, const char * argv[])
     std::thread writerThreadLR = threadedWrite(pTrfFrame, writerLR);
     LOG4CXX_DEBUG(logger, "Hi-res output stream info:\n" << avtools::getStreamInfo(pOutStrHR));
     std::thread writerThreadHR = threadedWrite(pTrfFrame, writerHR);
-
-    std::cout << "press Ctrl+C to exit...";
 
     // -----------
     // Cleanup
@@ -319,6 +330,57 @@ namespace
             throw std::runtime_error("Couldn't find " + type + " options in " + configFile);
         }
         return opts;
+    }
+
+    void removeFiles(const std::string& prefix, const bfs::path& path/*="."*/)
+    {
+        LOG4CXX_DEBUG(logger, "Will remove " << prefix << "* from " << path);
+        if( !bfs::exists(path) || !bfs::is_directory(path))
+        {
+            throw std::runtime_error(path.string() + " is not a valid path.");
+        }
+        std::vector<bfs::path> filesToRemove;
+        for (bfs::recursive_directory_iterator it(path), itEnd; it != itEnd; ++it)
+        {
+            if( bfs::is_regular_file(*it)
+               && (it->path().filename().string().find(prefix) == 0)
+               && ((it->path().extension().string() == ".ts") || (it->path().extension().string() == ".m3u8") )
+               )
+            {
+                filesToRemove.push_back(it->path());
+            }
+        }
+        char answer;
+        do
+        {
+            std::cout << "Found " << filesToRemove.size() << " files starting with " << prefix << ". Remove them? [y/n]" << std::endl;
+            std::cin >> answer;
+        }
+        while( !std::cin.fail() && (answer != 'y') && (answer != 'Y')&& (answer != 'n') && (answer != 'N') );
+
+        if ((answer == 'n') || (answer == 'N'))
+        {
+            return;
+        }
+#ifndef NDEBUG
+        int nFilesRemoved = 0;
+        std::for_each(filesToRemove.begin(), filesToRemove.end(),
+                      [&nFilesRemoved](const bfs::path& p)
+                      {
+                          if (bfs::remove(p))
+                          {
+                              LOG4CXX_DEBUG(logger, "Removed: " << p);
+                              ++nFilesRemoved;
+                          }
+                          else
+                          {
+                              LOG4CXX_DEBUG(logger, "Could not remove: " << p);
+                          }
+                      });
+        LOG4CXX_DEBUG(logger, "Removed " << nFilesRemoved << " of " << filesToRemove.size() << " files.");
+#else
+        std::for_each(filesToRemove.begin(), filesToRemove.end(), [](const bfs::path& p){bfs::remove(p);});
+#endif
     }
 
     // ---------------------------
@@ -648,7 +710,7 @@ namespace
             warpedImg = cv::Mat((*ppFrame)->height, (*ppFrame)->width, CV_8UC3);
         }
         //Start the loop
-        while ( cv::waitKey(30) < 0 )    //wait for key press
+        while ( !g_Status.isEnded() && (cv::waitKey(20) < 0) )    //wait for key press
         {
             auto ppFrame = pFrame.lock();
             if (!ppFrame)
@@ -721,6 +783,10 @@ namespace
                 }
                 cv::imshow(INPUT_WINDOW_NAME, inputImg);
             }
+        }
+        if (g_Status.isEnded())
+        {
+            return cv::Mat();
         }
         if (board.corners.size() == 4)
         {

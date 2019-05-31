@@ -97,9 +97,8 @@ namespace
     /// Function that starts a stream writer that writes to a stream from a threaded frame
     /// @param[in] pFrame threadsafe frame to read from
     /// @param[in] writer media writer instance
-    /// @param[in] timebase time base of the incoming frames
     /// @return a new thread that reads frames from the input frame and writes to an output file
-    std::thread threadedWrite(std::weak_ptr<const avtools::ThreadsafeFrame> pFrame, avtools::MediaWriter& writer, avtools::TimeBaseType timebase);
+    std::thread threadedWrite(std::weak_ptr<const avtools::ThreadsafeFrame> pFrame, avtools::MediaWriter& writer);
 
     /// Asks the user to choose the corners of the board and undoes the
     /// perspective transform. This can then be used with
@@ -205,7 +204,7 @@ int main(int argc, const char * argv[])
     avtools::MediaReader rdr(inOpts.url, inOpts.muxerOpts);
     const AVStream* pVidStr = rdr.getVideoStream();
     LOG4CXX_DEBUG(logger, "Input stream info:\n" << avtools::getStreamInfo(pVidStr) );
-    auto pInFrame = avtools::ThreadsafeFrame::Get(pVidStr->codecpar->width, pVidStr->codecpar->height, PIX_FMT);
+    auto pInFrame = avtools::ThreadsafeFrame::Get(pVidStr->codecpar->width, pVidStr->codecpar->height, PIX_FMT, pVidStr->time_base);
     std::thread readerThread = threadedRead(pInFrame, rdr);
 
     // -----------
@@ -231,15 +230,15 @@ int main(int argc, const char * argv[])
     // Start warping & writing
     // -----------
     // Start the warper thread
-    auto pTrfFrame = avtools::ThreadsafeFrame::Get(pVidStr->codecpar->width, pVidStr->codecpar->height, PIX_FMT);
+    auto pTrfFrame = avtools::ThreadsafeFrame::Get(pVidStr->codecpar->width, pVidStr->codecpar->height, PIX_FMT, pVidStr->time_base);
     assert( (AV_NOPTS_VALUE == (*pTrfFrame)->best_effort_timestamp) && (AV_NOPTS_VALUE == (*pTrfFrame)->pts) );
     std::thread warperThread = threadedWarp(pInFrame, pTrfFrame, trfMatrix);
 
     // Start the writer thread
     LOG4CXX_DEBUG(logger, "Lo-res output stream info:\n" << avtools::getStreamInfo(pOutStrLR));
-    std::thread writerThreadLR = threadedWrite(pTrfFrame, writerLR, pVidStr->time_base);
+    std::thread writerThreadLR = threadedWrite(pTrfFrame, writerLR);
     LOG4CXX_DEBUG(logger, "Hi-res output stream info:\n" << avtools::getStreamInfo(pOutStrHR));
-    std::thread writerThreadHR = threadedWrite(pTrfFrame, writerHR, pVidStr->time_base);
+    std::thread writerThreadHR = threadedWrite(pTrfFrame, writerHR);
 
     std::cout << "press Ctrl+C to exit...";
 
@@ -263,28 +262,34 @@ int main(int argc, const char * argv[])
 
 namespace
 {
-    std::string toLower(std::string s)
+    /// Compare two strings in a case-insensitive manner
+    /// @return true if two strings are the same
+    bool strequals(const std::string& a, const std::string& b)
     {
-        std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c){ return std::tolower(c); });
-        return s;
+        return std::equal(a.begin(), a.end(),
+                          b.begin(), b.end(),
+                          [](char a, char b) {
+                              return tolower(a) == tolower(b);
+                          });
     }
 
+    /// Parses a property tree and fills the options structure
     void getOptsFromTree(const boost::property_tree::ptree& tree, Options& opts)
     {
         for (auto& branch : tree)
         {
-            if ( toLower(branch.first) == "url" )
+            if ( strequals(branch.first, "url") )
             {
                 opts.url = branch.second.get_value<std::string>();
             }
-            if ( toLower(branch.first) == "codec_options" )
+            if ( strequals(branch.first, "codec_options") )
             {
                 for (auto &leaf : branch.second)
                 {
                     opts.codecOpts.add(leaf.first, leaf.second.get_value<std::string>());
                 }
             }
-            if ( toLower(branch.first) == "muxer_options" )
+            if ( strequals(branch.first, "muxer_options") )
             {
                 for (auto &leaf : branch.second)
                 {
@@ -303,7 +308,7 @@ namespace
         // Read input options
         for (auto& subtree: tree)
         {
-            if (toLower(subtree.first) == toLower(type))
+            if ( strequals(subtree.first, type) )
             {
                 isOptsFound = true;
                 getOptsFromTree(subtree.second, opts);
@@ -423,6 +428,7 @@ namespace
                     }
                     frame->best_effort_timestamp -= pS->start_time;
                     frame->pts -= pS->start_time;
+                    assert( av_cmp_q(frame.timebase, pS->time_base) == 0);
                     LOG4CXX_DEBUG(logger, "Frame read: \n" << avtools::getFrameInfo(frame.get(), pS, 1));
                     auto ppFrame = pFrame.lock();
                     if (!ppFrame)
@@ -448,9 +454,9 @@ namespace
         });
     }
 
-    std::thread threadedWrite(std::weak_ptr<const avtools::ThreadsafeFrame> pFrame, avtools::MediaWriter& writer, avtools::TimeBaseType timebase)
+    std::thread threadedWrite(std::weak_ptr<const avtools::ThreadsafeFrame> pFrame, avtools::MediaWriter& writer)
     {
-        return std::thread([pFrame, &writer, timebase](){
+        return std::thread([pFrame, &writer](){
             try
             {
                 log4cxx::MDC::put("threadname", "writer");
@@ -461,23 +467,23 @@ namespace
                     if (!ppFrame)
                     {
                         LOG4CXX_DEBUG(logger, "Writer received null frame - closing.");
-                        writer.write(nullptr, timebase);
+                        writer.write(nullptr, avtools::TimeBaseType{});
                         break;
                     }
                     const auto& inFrame = *ppFrame;
                     {
                         auto lock = inFrame.getReadLock();
-                        inFrame.cv.wait(lock, [&inFrame, ts](){return g_Status.isEnded() || (inFrame->best_effort_timestamp > ts);});
+                        inFrame.cv.wait(lock, [&inFrame, ts](){return g_Status.isEnded() || (inFrame->best_effort_timestamp > ts);});   //note that we assume the timebase of the incoming frames do not change
                         if (g_Status.isEnded())
                         {
-                            writer.write(nullptr, timebase);
+                            writer.write(nullptr, avtools::TimeBaseType{});
                             break;
                         }
                         assert(inFrame->best_effort_timestamp > ts);
                         ts = inFrame->best_effort_timestamp;
                         LOG4CXX_DEBUG(logger, "Writer received frame:\n" << inFrame.info(1));
                         //Push frame to filtergraph
-                        writer.write(inFrame, timebase);
+                        writer.write(inFrame);
                     }
                 }
             }
@@ -763,7 +769,8 @@ namespace
                         {
                             auto wLock = warpedFrame.getWriteLock();
                             assert(warpedFrame->best_effort_timestamp < ts);
-                            cv::Mat inImg = getImage(inFrame);
+                            assert( (av_cmp_q(warpedFrame.timebase, inFrame.timebase) == 0) && (warpedFrame.type == AVMediaType::AVMEDIA_TYPE_VIDEO) && (inFrame.type == AVMediaType::AVMEDIA_TYPE_VIDEO) );
+                            cv::Mat inImg = getImage(inFrame);  //should we instead copy this data to this thread?
                             cv::Mat outImg = getImage(warpedFrame);
                             cv::warpPerspective(inImg, outImg, trfMatrix, inImg.size(), cv::InterpolationFlags::INTER_LANCZOS4);
                             int ret = av_frame_copy_props(warpedFrame.get(), inFrame.get());

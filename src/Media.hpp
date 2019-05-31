@@ -211,7 +211,11 @@ namespace std
     {
         return std::to_string(ratio.num) + "/" + std::to_string(ratio.den);
     }
-    
 }   //::std
+
+inline bool operator== (AVRational r1, AVRational r2)
+{
+    return (0 == av_cmp_q(r1, r2));
+}
 
 #endif /* defined(__Media_hpp__) */

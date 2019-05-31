@@ -23,8 +23,8 @@ namespace avtools
     // ---------------------------
     // Threadsafe Frame Definitions
     // ---------------------------
-    ThreadsafeFrame::ThreadsafeFrame(int width, int height, AVPixelFormat format):
-    Frame(width, height, format),
+    ThreadsafeFrame::ThreadsafeFrame(int width, int height, AVPixelFormat format, TimeBaseType tb):
+    Frame(width, height, format, tb),
     pConvCtx_(nullptr),
     mutex(),
     cv()
@@ -43,6 +43,8 @@ namespace avtools
     void ThreadsafeFrame::update(const avtools::Frame &frm)
     {
         assert(pFrame_);
+        assert(frm.type == AVMediaType::AVMEDIA_TYPE_VIDEO);
+        assert( 0 == av_cmp_q(frm.timebase, timebase) );
         int ret;
         if (frm)
         {
@@ -68,7 +70,6 @@ namespace avtools
                         throw avtools::MediaError("Error copying frame.", ret);
                     }
                 }
-
                 ret = av_frame_copy_props(pFrame_, frm.get());
                 if (ret < 0)
                 {

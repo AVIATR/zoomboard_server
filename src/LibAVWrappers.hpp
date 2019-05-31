@@ -48,30 +48,36 @@ namespace avtools
         AVFrame* pFrame_;                                       ///< ptr to wrapped frame
     public:
         AVMediaType type;                                       ///< type of frame if data buffers are initialized
+        TimeBaseType timebase;                                  ///< timebase of the frame
+
         /// Ctor that wraps around an frame
         /// @param[in] pFrame ptr to a preallocated frame, or nullptr if one should be internally allocated
         /// @param[in] type type of the data that this frame is expected to contain.
+        /// @param[in] tb timebase of the frame if known
         /// @throw MediaError if there is a problem allocating a frame of the given type.
-        Frame(AVFrame* pFrame=nullptr, AVMediaType type=AVMEDIA_TYPE_UNKNOWN);
+        Frame(AVFrame* pFrame=nullptr, AVMediaType type=AVMEDIA_TYPE_UNKNOWN, TimeBaseType tb=TimeBaseType{});
         
         /// Ctor that allocates a frame according the provided codec parameters
         /// @param[in] codecPar codec parameters
+        /// @param[in] tb timebase of the frame if known
         /// @throw StreamError if the constructor was unable to allocate a frame
-        Frame(const AVCodecParameters& codecPar);
+        Frame(const AVCodecParameters& codecPar, TimeBaseType tb=TimeBaseType{});
 
         /// Ctor that allocates a frame according the provided codec parameters
         /// @param[in] codecPar codec parameters
+        /// @param[in] tb timebase of the frame if known
         /// @throw StreamError if the constructor was unable to allocate a frame
-        Frame(const CodecParameters& codecPar);
+        Frame(const CodecParameters& codecPar, TimeBaseType tb=TimeBaseType{});
 
         /// Allocates a video frame with a given size, format and sample rate.
         /// Basically combines av_frame_alloc() and initVideoFrame()
         /// @param[in] width how wide the image is in pixels
         /// @param[in] height how high the image is in pixels
         /// @param[in] format pixel format
+        /// @param[in] tb timebase of the frame if known
         /// @param[in] cs color space type
         /// @return pointer to a new frame, nullptr if a frame could not be allocated
-        Frame(int width, int height, AVPixelFormat format, AVColorSpace cs=AVColorSpace::AVCOL_SPC_RGB);
+        Frame(int width, int height, AVPixelFormat format, TimeBaseType tb=TimeBaseType{}, AVColorSpace cs=AVColorSpace::AVCOL_SPC_RGB);
 
         /// Copy ctor
         /// @param[in] frame source frame. Note that the data buffers are not cloned, but this frame refers
@@ -404,7 +410,8 @@ namespace avtools
         /// @param[in] n length of buffer
         inline CharBuf(size_t n): p_((char*) av_malloc_array(n, sizeof(char))) {}
         inline CharBuf(const CharBuf& cb): p_(av_strdup(cb.get())) {};
-        inline ~CharBuf() {if (p_) av_freep(&p_);}    ///< Dtor
+        inline void free() {if (p_) av_freep(&p_);}
+        inline ~CharBuf() {free();}    ///< Dtor
         inline char*& get() {return p_;}            ///< @return a reference to the underlying ptr
         inline const char* get() const {return p_;} ///< @return the underlying ptr
         /// @return true if the underlying ptr is non-null

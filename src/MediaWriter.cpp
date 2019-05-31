@@ -217,13 +217,15 @@ namespace avtools
                     throw MediaError("Error reading packets from encoder", ret);
                 }
 
-                pkt_->dts = AV_NOPTS_VALUE;  //let the muxer figure this out
                 pkt_->stream_index = 0; //only one output stream
-                pkt_->pts = av_rescale_q(pkt_->pts, codecCtx_->time_base, timebase);   //this is necessary since writing the header can change the time_base of the stream.
-                pkt_->duration = av_rescale_q(pkt_->duration, codecCtx_->time_base, timebase);
+                av_packet_rescale_ts(pkt_.get(), codecCtx_->time_base, timebase);
+//                pkt_->dts = AV_NOPTS_VALUE;  //let the muxer figure this out
+//                pkt_->pts = av_rescale_q(pkt_->pts, codecCtx_->time_base, timebase);   //this is necessary since writing the header can change the time_base of the stream.
+//                pkt_->duration = av_rescale_q(pkt_->duration, codecCtx_->time_base, timebase);
                 LOG4CXX_DEBUG(logger, "Writing packet:\n " << pkt_.info(1));
                 //mux encoded frame
-                ret = av_interleaved_write_frame(formatCtx_.get(), pkt_.get());
+//                ret = av_interleaved_write_frame(formatCtx_.get(), pkt_.get());
+                ret = av_write_frame(formatCtx_.get(), pkt_.get()); //only one stream
                 if (ret < 0)
                 {
                     throw MediaError("Error muxing packet", ret);
@@ -347,7 +349,11 @@ namespace avtools
 
             //Initialize codec context
             LOG4CXX_DEBUG(logger, "MediaWriter will use a " << pOutFormat->name << " container to store " << pCodecDesc->name << " encoded video." );
-            codecCtx_->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;    // let codec know we are using global header
+             // let codec know if we are using global header
+            if (formatCtx_->oformat->flags & AVFMT_GLOBALHEADER)
+            {
+                codecCtx_->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
+            }
 
             // Open encoder
             const AVCodec* pEncoder = avcodec_find_encoder(pCodecDesc->id);
@@ -363,18 +369,18 @@ namespace avtools
 //            }
 
             // Set the timebase
-            assert(codecOpts.has("time_base"));
-            avtools::TimeBaseType timebase;
-            ret = av_parse_video_rate(&timebase, codecOpts["time_base"].c_str());
-            if ( ret < 0)
+            //get frame rate
+            AVRational framerate;
+            assert(muxerOpts.has("framerate"));
+            ret = av_parse_video_rate(&framerate, muxerOpts["framerate"].c_str());
+            if (ret < 0)
             {
-                throw MediaError("Unable to parse video rate from codec options", ret);
+                throw MediaError("Unable to parse frame rate from muxer options", ret);
             }
-            codecCtx_->time_base = timebase;                    // Set timebase
-            LOG4CXX_DEBUG(logger, "Setting time base to " << timebase);
 
-//            av_opt_set_dict(codecCtx_.get(), &codecOpts.get());
-//            av_opt_set_dict(codecCtx_->priv_data, &codecOpts.get());
+            codecCtx_->time_base = av_inv_q(framerate);;                    // Set timebase
+            LOG4CXX_DEBUG(logger, "Setting time base to " << codecCtx_->time_base);
+
             ret = avcodec_open2(codecCtx_.get(), pEncoder, &codecOpts.get());
             if (ret < 0)
             {
@@ -407,18 +413,10 @@ namespace avtools
             {
                 throw MediaError("Unable to add stream for " + std::string(pEncoder->name));
             }
-            //get frame rate
-            AVRational framerate;
-            assert(muxerOpts.has("framerate"));
-            ret = av_parse_video_rate(&framerate, muxerOpts["framerate"].c_str());
-            if (ret < 0)
-            {
-                throw MediaError("Unable to parse frame rate from muxer options", ret);
-            }
             pStr->avg_frame_rate = framerate;
             //copy codec params to stream
             avcodec_parameters_from_context(pStr->codecpar, codecCtx_.get());
-            pStr->time_base = timebase;
+            pStr->time_base = codecCtx_->time_base;
             pStr->start_time = AV_NOPTS_VALUE;
 
             assert( pStr->codecpar && (pStr->codecpar->codec_id == pCodecDesc->id) && (pStr->codecpar->codec_type == AVMEDIA_TYPE_VIDEO) );
@@ -529,6 +527,7 @@ namespace avtools
                 //timestamps should be in terms of the input time_base, convert to output
                 filtFrame_->best_effort_timestamp = av_rescale_q(filtFrame_->best_effort_timestamp, outTimebase, codecCtx_->time_base);
                 filtFrame_->pts = av_rescale_q(filtFrame_->pts, outTimebase, codecCtx_->time_base);
+                filtFrame_->pict_type = AV_PICTURE_TYPE_NONE;   //to let the encoder figure this out
                 //encode frame
                 encodeFrame(filtFrame_.get());
             }
@@ -579,8 +578,9 @@ namespace avtools
         }
     }
 
-    void MediaWriter::write(const Frame &frame, TimeBaseType timebase)
+    void MediaWriter::write(const Frame &frame)
     {
-        write(frame.get(), timebase);
+        assert(frame.type == AVMediaType::AVMEDIA_TYPE_VIDEO);
+        write(frame.get(), frame.timebase);
     }
 }   //::avtools

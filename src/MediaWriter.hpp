@@ -58,8 +58,7 @@ namespace avtools
 
         /// Writes a video frame to the stream. Write nullptr to close the stream
         /// @param[in] Frame frame data to write
-        /// @param[in] timebase for the incoming frames
-        void write(const Frame& frame, TimeBaseType timebase);
+        void write(const Frame& frame);
 
     private:
         class Implementation;                       ///< implementation class

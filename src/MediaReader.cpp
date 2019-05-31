@@ -240,12 +240,16 @@ namespace avtools
             switch (ret)
             {
                 case 0:
+                {
                     if (frame->pts == AV_NOPTS_VALUE)
                     {
                         frame->pts = frame->best_effort_timestamp;
                     }
                     frame.type = AVMEDIA_TYPE_VIDEO;
-                    return formatCtx_->streams[stream_];
+                    const AVStream* pStr = formatCtx_->streams[stream_];
+                    frame.timebase = pStr->time_base;
+                    return pStr;
+                }
                 case AVERROR(EAGAIN):   //more packets need to be read & sent to the decoder before decoding
                     pkt_.unref();
                     return read(frame);

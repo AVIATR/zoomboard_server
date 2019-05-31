@@ -34,6 +34,8 @@ namespace
         ss << filler << "dts:" << pPkt->dts << std::endl;
         ss << filler << "duration:" << pPkt->duration << std::endl;
         ss << filler << "stream:" << pPkt->stream_index << std::endl;
+        ss << filler << "isRefCounted:" << std::boolalpha << (pPkt->buf != nullptr) << std::endl;
+        ss << filler << "hasKeyFrame:" << std::boolalpha << (pPkt->flags & AV_PKT_FLAG_KEY) << std::endl;
         return ss.str();
     }
 
@@ -53,7 +55,6 @@ namespace avtools
         pFrame->height = height;
         pFrame->format = format;
         //set buffers
-        //        int ret = av_image_alloc(pFrameOut->data, pFrameOut->linesize, width, height, format, ALIGNMENT);
         int ret = av_frame_get_buffer(pFrame, 0);
         if (ret < 0)
         {
@@ -66,9 +67,10 @@ namespace avtools
     // AVFrame wrapper
     // -------------------------------------------------
 
-    Frame::Frame(AVFrame* pFrame, AVMediaType typ/*=AVMEDIA_TYPE_UNKNOWN*/):
+    Frame::Frame(AVFrame* pFrame, AVMediaType typ/*=AVMEDIA_TYPE_UNKNOWN*/, TimeBaseType tb/*=TimeBaseType{}*/):
     pFrame_(pFrame ? pFrame : av_frame_alloc()),
-    type(typ)
+    type(typ),
+    timebase(tb)
     {
         if (!pFrame_)
         {
@@ -80,8 +82,8 @@ namespace avtools
         }
     }
 
-    Frame::Frame(int width, int height, AVPixelFormat format, AVColorSpace cs/*=AVColorSpace::AVCOL_SPC_RGB*/):
-    Frame(nullptr, AVMediaType::AVMEDIA_TYPE_VIDEO)
+    Frame::Frame(int width, int height, AVPixelFormat format, TimeBaseType tb/*=TimeBaseType{}*/, AVColorSpace cs/*=AVColorSpace::AVCOL_SPC_RGB*/):
+    Frame(nullptr, AVMediaType::AVMEDIA_TYPE_VIDEO, tb)
     {
         assert(pFrame_);
         try
@@ -96,16 +98,15 @@ namespace avtools
         }
     }
     
-    Frame::Frame(const AVCodecParameters& cPar):
-    Frame()
+    Frame::Frame(const AVCodecParameters& cPar, TimeBaseType tb/*=TimeBaseType{}*/):
+    Frame(nullptr, cPar.codec_type, tb)
     {
         try
         {
-            switch (cPar.codec_type)
+            switch (type)
             {
                 case AVMEDIA_TYPE_VIDEO:
                     initVideoFrame(pFrame_, cPar.width, cPar.height, (AVPixelFormat) cPar.format, cPar.color_space);
-                    type = AVMediaType::AVMEDIA_TYPE_VIDEO;
                     break;
                 default:    //may implement other types in the future
                     throw std::invalid_argument("Frames of type " + std::to_string(cPar.codec_type) + " are not implemented.");
@@ -121,25 +122,25 @@ namespace avtools
         }
     }
 
-    Frame::Frame(const CodecParameters& cPar):
-    Frame(*cPar.get())
+    Frame::Frame(const CodecParameters& cPar, TimeBaseType tb/*=TimeBaseType{}*/):
+    Frame(*cPar.get(), tb)
     {
     }
 
     Frame::Frame(const Frame& frame):
     pFrame_( av_frame_clone(frame.get()) ),
-    type(frame.type)
+    type(frame.type),
+    timebase(frame.timebase)
     {
         if (!pFrame_)
         {
-            type = AVMediaType::AVMEDIA_TYPE_UNKNOWN;
             throw MediaError("Frame: Unable to copy construct frame.");
         }
     }
 
     Frame Frame::clone() const
     {
-        Frame out(pFrame_->width, pFrame_->height, (AVPixelFormat) pFrame_->format, pFrame_->colorspace);
+        Frame out(pFrame_->width, pFrame_->height, (AVPixelFormat) pFrame_->format, timebase, pFrame_->colorspace);
         clone(out);
         return out;
     }
@@ -147,7 +148,9 @@ namespace avtools
     void Frame::clone(Frame& frame) const
     {
         assert(frame);
-        assert ( (frame->width == pFrame_->width) && (frame->height == pFrame_->height) && (frame->format == pFrame_->format) && (frame->colorspace == pFrame_->colorspace) );
+        assert ( (frame->width == pFrame_->width) && (frame->height == pFrame_->height)
+                && (frame->format == pFrame_->format) && (frame->colorspace == pFrame_->colorspace)
+                && (frame.type == type) && (av_cmp_q(timebase, frame.timebase) == 0) );
         int ret = av_frame_copy_props(frame.get(), pFrame_);
         if (ret < 0)
         {
@@ -181,13 +184,16 @@ namespace avtools
             throw MediaError("Frame: Unable to add reference to frame.", ret);
         }
         type = frame.type;
+        timebase = frame.timebase;
         return *this;
     }
 
     std::string Frame::info(int indent/*=0*/) const
     {
         assert(pFrame_);
-        return getFrameInfo(pFrame_, type, indent);
+        return getFrameInfo(pFrame_, type, indent) \
+        +  std::string(indent, '\t') + "time: " + std::to_string(calculateTime(pFrame_->best_effort_timestamp, timebase)) \
+        + "s [timebase=" + std::to_string(timebase) + "]\n";
     }
 
     // -------------------------------------------------
@@ -322,8 +328,7 @@ namespace avtools
     
     bool Dictionary::has(const std::string &key) const
     {
-        assert(pDict_);
-        return av_dict_get(pDict_, key.c_str(), nullptr, 0);
+        return (pDict_ ? av_dict_get(pDict_, key.c_str(), nullptr, 0) != nullptr : false);
     }
 
     std::string Dictionary::as_string(const char keySep/*='\t'*/, const char entrySep/*='\n'*/) const

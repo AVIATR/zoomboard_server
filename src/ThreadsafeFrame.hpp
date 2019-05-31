@@ -31,7 +31,8 @@ namespace avtools
         /// @param[in] width width of the frame
         /// @param[in] height of the frame
         /// @param[in] format frame format
-        ThreadsafeFrame(int width, int height, AVPixelFormat format);
+        /// @param[in] timebase the timebase the frame timestamps are presented in, if known
+        ThreadsafeFrame(int width, int height, AVPixelFormat format, TimeBaseType tb);
         mutable std::shared_timed_mutex mutex;                              ///< Mutex used for single writer/multiple reader access TODO: Update to c++17 and std::shared_mutex
     public:
         typedef std::shared_lock<std::shared_timed_mutex> read_lock_t;      ///< Read lock type, allows for multi-threaded read
@@ -57,10 +58,11 @@ namespace avtools
         /// @param[in] width width of the frame
         /// @param[in] height of the frame
         /// @param[in] format frame format
+        /// @param[in] timebase the timebase the frame timestamps are presented in, if known
         /// @return a shared pointer to an instance of ThreadsafeFrame
-        inline static std::shared_ptr<ThreadsafeFrame> Get(int width, int height, AVPixelFormat fmt)
+        inline static std::shared_ptr<ThreadsafeFrame> Get(int width, int height, AVPixelFormat fmt, TimeBaseType tb=TimeBaseType{})
         {
-            return std::shared_ptr<ThreadsafeFrame>(new ThreadsafeFrame(width, height, fmt));
+            return std::shared_ptr<ThreadsafeFrame>(new ThreadsafeFrame(width, height, fmt, tb));
         }
 
         /// @return a shared pointer to this object

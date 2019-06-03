@@ -23,6 +23,7 @@
 #include <boost/property_tree/ptree.hpp>
 #include <boost/property_tree/json_parser.hpp>
 #include <boost/filesystem.hpp>
+#include <boost/program_options.hpp>
 #include "opencv2/core.hpp"
 #include "opencv2/imgproc.hpp"
 #include "opencv2/highgui.hpp"
@@ -42,7 +43,7 @@ using avtools::MediaError;
 namespace
 {
     namespace bfs = ::boost::filesystem;
-
+    namespace bpo = ::boost::program_options;
     /// @class A structure containing the pertinent ffmpeg options
     /// See https://www.ffmpeg.org/ffmpeg-devices.html for the list of codec & stream options
     struct Options
@@ -54,9 +55,9 @@ namespace
 
     inline std::ostream& operator<<(std::ostream& stream, const Options& opts)
     {
-        return ( stream << "url:" << opts.url
-                << "\ncodec options:\n" << opts.codecOpts.as_string()
-                << "\nmuxer options:\n" << opts.muxerOpts.as_string() );
+        return ( stream << "url:" << opts.url << "\n"
+                << "codec options:\n" << opts.codecOpts.as_string()
+                << "muxer options:\n" << opts.muxerOpts.as_string() );
     }
 
     /// Parses a json file to retrieve the output configuration to use
@@ -68,7 +69,8 @@ namespace
     /// Removes all files with a given prefix
     /// @param[in] prefix file prefix
     /// @param[in] path path to search
-    void removeFiles(const std::string& prefix, const bfs::path& path=".");
+    /// @param[in] assumeYes if true, do not confirm erasure
+    void removeFiles(const std::string& prefix, const bfs::path& path=".", bool assumeYes=false);
 
     /// @class Synchronization thread to signal end and capture exceptions from threads
     class ProgramStatus
@@ -166,11 +168,10 @@ int main(int argc, const char * argv[])
     std::signal( SIGINT, [](int){g_Status.end();} );
     std::cout << "press Ctrl+C to exit..." << std::endl;
 
-
     // Set up logger. See https://logging.apache.org/log4cxx/latest_stable/usage.html for more info,
     //see https://logging.apache.org/log4cxx/latest_stable/apidocs/classlog4cxx_1_1_pattern_layout.html for patterns
     log4cxx::MDC::put("threadname", "main");    //add name of thread
-    log4cxx::LayoutPtr layoutPtr(new log4cxx::PatternLayout("%d %-5p [%-8X{threadname} %.8t] %c{1} - %m%n")); 
+    log4cxx::LayoutPtr layoutPtr(new log4cxx::PatternLayout("%d %-5p [%-8X{threadname} %.8t] %c{1} - %m%n"));
     log4cxx::AppenderPtr consoleAppPtr(new log4cxx::ConsoleAppender(layoutPtr));
     log4cxx::BasicConfigurator::configure(consoleAppPtr);
     //Also add file appender - see https://stackoverflow.com/questions/13967382/how-to-set-log4cxx-properties-without-property-file
@@ -187,18 +188,60 @@ int main(int argc, const char * argv[])
     logger->setLevel(debugLevel);
     LOG4CXX_DEBUG(logger,"Created ConsoleAppender appender");
 
-    const std::string USAGE = "Usage: " + std::string(argv[0]) + " <config_file.json>";
-    // Parse command line arguments & load the config file
-    if (argc != 2)
+    //Parse command line options
+    static const std::string PROGRAM_NAME = bfs::path(argv[0]).filename().string() + " v" + std::to_string(RTMP_SERVER_VERSION_MAJOR) + "." + std::to_string(RTMP_SERVER_VERSION_MINOR);
+
+    bpo::options_description programDesc(PROGRAM_NAME + " options");
+    bpo::positional_options_description posDesc;
+    bpo::variables_map vm;
+    posDesc.add("config_file", -1);
+    programDesc.add_options()
+    ("help,h", "produce help message")
+    ("version,v", "program version")
+    ("config_file", bpo::value<std::string>(), "path of configuration file to use for video options")
+    ("yes,y", "answer 'yes' to every prompt'")
+    ;
+
+    try
     {
-        LOG4CXX_FATAL(logger, "Incorrect number of arguments." << USAGE);
+        bpo::store(bpo::command_line_parser(argc, argv).options(programDesc).positional(posDesc).run(), vm);
+        bpo::notify(vm);
+    }
+    catch (std::exception& err)
+    {
+        LOG4CXX_FATAL(logger, "Error parsing command line arguments:" << err.what() << programDesc);
         return EXIT_FAILURE;
     }
-    const std::string configFile = argv[1];
+    if (vm.count("help"))
+    {
+        std::cout << programDesc << std::endl;
+        return EXIT_SUCCESS;
+    }
+    else if (vm.count("version"))
+    {
+        std::cout << PROGRAM_NAME << std::endl;
+        return EXIT_SUCCESS;
+    }
+
+    if (!vm.count("config_file"))
+    {
+        LOG4CXX_FATAL(logger, "No configuration file provided!\n" << programDesc)
+        return EXIT_FAILURE;
+    }
+    const std::string configFile = vm["config_file"].as<std::string>();
+    LOG4CXX_INFO(logger, "Provided configuration file: " << configFile);
+//    const std::string USAGE = "Usage: " + std::string(argv[0]) + " <config_file.json>";
+//    // Parse command line arguments & load the config file
+//    if (argc != 2)
+//    {
+//        LOG4CXX_FATAL(logger, "Incorrect number of arguments." << USAGE);
+//        return EXIT_FAILURE;
+//    }
+//    const std::string configFile = argv[1];
     //Until we convert to C++17, we need to use boost::filesystem to check for file. Afterwards, we can use std::filesystem
     if ( !bfs::exists( configFile ) )
     {
-        LOG4CXX_FATAL(logger, "Configuration file " << configFile << " does not exist." << USAGE);
+        LOG4CXX_FATAL(logger, "Could not find configuration file " << configFile);
         return EXIT_FAILURE;
     }
 
@@ -206,8 +249,8 @@ int main(int argc, const char * argv[])
     Options outOptsLR = getOptions(configFile, "output_lr");
     Options outOptsHR = getOptions(configFile, "output_hr");
     // Remove old stream files if they're around
-    removeFiles(bfs::path(outOptsLR.url).stem().string());
-    removeFiles(bfs::path(outOptsHR.url).stem().string());
+    removeFiles(bfs::path(outOptsLR.url).stem().string(), bfs::path(outOptsLR.url).root_path(), vm.count("yes"));
+    removeFiles(bfs::path(outOptsHR.url).stem().string(), bfs::path(outOptsHR.url).root_path(), vm.count("yes"));
 
 
     // -----------
@@ -332,15 +375,16 @@ namespace
         return opts;
     }
 
-    void removeFiles(const std::string& prefix, const bfs::path& path/*="."*/)
+    void removeFiles(const std::string& prefix, const bfs::path& path/*="."*/, bool assumeYes/*=false*/)
     {
-        LOG4CXX_DEBUG(logger, "Will remove " << prefix << "* from " << path);
-        if( !bfs::exists(path) || !bfs::is_directory(path))
+        bfs::path pathParsed = (path.empty() ? "." : path);
+        LOG4CXX_DEBUG(logger, "Will remove " << prefix << "* from " << pathParsed);
+        if( !bfs::exists(pathParsed) || !bfs::is_directory(pathParsed))
         {
-            throw std::runtime_error(path.string() + " is not a valid path.");
+            throw std::runtime_error(pathParsed.string() + " is not a valid path.");
         }
         std::vector<bfs::path> filesToRemove;
-        for (bfs::recursive_directory_iterator it(path), itEnd; it != itEnd; ++it)
+        for (bfs::recursive_directory_iterator it(pathParsed), itEnd; it != itEnd; ++it)
         {
             if( bfs::is_regular_file(*it)
                && (it->path().filename().string().find(prefix) == 0)
@@ -350,17 +394,20 @@ namespace
                 filesToRemove.push_back(it->path());
             }
         }
-        char answer;
-        do
+        if (not assumeYes)
         {
-            std::cout << "Found " << filesToRemove.size() << " files starting with " << prefix << ". Remove them? [y/n]" << std::endl;
-            std::cin >> answer;
-        }
-        while( !std::cin.fail() && (answer != 'y') && (answer != 'Y')&& (answer != 'n') && (answer != 'N') );
+            char answer;
+            do
+            {
+                std::cout << "Found " << filesToRemove.size() << " files starting with " << prefix << ". Remove them? [y/n]" << std::endl;
+                std::cin >> answer;
+            }
+            while( !std::cin.fail() && (answer != 'y') && (answer != 'Y')&& (answer != 'n') && (answer != 'N') );
 
-        if ((answer == 'n') || (answer == 'N'))
-        {
-            return;
+            if ((answer == 'n') || (answer == 'N'))
+            {
+                return;
+            }
         }
 #ifndef NDEBUG
         int nFilesRemoved = 0;

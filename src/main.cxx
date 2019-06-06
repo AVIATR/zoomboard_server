@@ -181,12 +181,13 @@ int main(int argc, const char * argv[])
     // Set log level.
 #ifndef NDEBUG
     const auto debugLevel = log4cxx::Level::getDebug();
+    av_log_set_level(AV_LOG_VERBOSE);
 #else
     const auto debugLevel = log4cxx::Level::getWarn();
+    av_log_set_level(AV_LOG_ERROR);
 #endif
     log4cxx::Logger::getRootLogger()->setLevel(debugLevel);
     logger->setLevel(debugLevel);
-    LOG4CXX_DEBUG(logger,"Created ConsoleAppender appender");
 
     //Parse command line options
     static const std::string PROGRAM_NAME = bfs::path(argv[0]).filename().string() + " v" + std::to_string(RTMP_SERVER_VERSION_MAJOR) + "." + std::to_string(RTMP_SERVER_VERSION_MINOR);

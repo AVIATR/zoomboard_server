@@ -394,7 +394,7 @@ namespace
                 filesToRemove.push_back(it->path());
             }
         }
-        if (not assumeYes)
+        if ( (not assumeYes) && (not filesToRemove.empty()) )
         {
             char answer;
             do
@@ -689,6 +689,7 @@ namespace
     {
         Board* pC = static_cast<Board*>(userdata);
         assert(pC->draggedPt < (int) pC->corners.size());
+        cv::Point2f curPt(x,y);
         switch(event)
         {
             case cv::MouseEventTypes::EVENT_LBUTTONDOWN:
@@ -696,8 +697,7 @@ namespace
                 assert(pC->draggedPt < 0);
                 for (int i = 0; i < pC->corners.size(); ++i)
                 {
-                    const cv::Point& pt = pC->corners[i];
-                    if (cv::abs(x-pt.x) + cv::abs(y - pt.y) < 10)
+                    if (cv::norm(curPt - pC->corners[i]) < 10.f)
                     {
                         pC->draggedPt = i;  //start dragging
                         break;
@@ -707,15 +707,13 @@ namespace
             case cv::MouseEventTypes::EVENT_MOUSEMOVE:
                 if ((flags & cv::MouseEventFlags::EVENT_FLAG_LBUTTON) && (pC->draggedPt >= 0))
                 {
-                    pC->corners[pC->draggedPt].x = x;
-                    pC->corners[pC->draggedPt].y = y;
+                    pC->corners[pC->draggedPt] = curPt;
                 }
                 break;
             case cv::MouseEventTypes::EVENT_LBUTTONUP:
                 if (pC->draggedPt >= 0)
                 {
-                    pC->corners[pC->draggedPt].x = x;
-                    pC->corners[pC->draggedPt].y = y;
+                    pC->corners[pC->draggedPt] = curPt;
                     pC->draggedPt = -1; //end dragging
                 }
                 else if (pC->corners.size() < 4)
@@ -724,7 +722,6 @@ namespace
                 }
                 break;
             default:
-                LOG4CXX_DEBUG(logger, "Received mouse event: " << event);
                 break;
         }
     }
@@ -789,14 +786,18 @@ namespace
                     if (aspect > IMG_ASPECT)
                     {
                         roi.height = (float) warpedImg.cols / aspect;
+                        assert(roi.width == (float) warpedImg.cols);
+                        assert(roi.x == 0.f);
                         roi.y = (warpedImg.rows - roi.height) / 2.f;
                         assert(roi.y >= 0.f);
                     }
                     else
                     {
                         roi.width = (float) warpedImg.rows * aspect;
+                        assert(roi.height == (float) warpedImg.rows);
                         roi.x = (warpedImg.cols - roi.width) / 2.f;
                         assert(roi.x >= 0.f);
+                        assert(roi.y == 0.f);
                     }
                     TGT_CORNERS = {roi.tl(), cv::Point2f(roi.x + roi.width, roi.y), roi.br(), cv::Point2f(roi.x, roi.y + roi.height)};
 
@@ -804,19 +805,35 @@ namespace
                     trfMatrix = cv::getPerspectiveTransform(board.corners, TGT_CORNERS);
 
                     //Calculate the constant in the transformation
-                    cv::Point2f br(
-                                   trfMatrix[0][0] * board.corners[2].x + trfMatrix[0][1] * board.corners[2].y + trfMatrix[0][2],
-                                   trfMatrix[1][0] * board.corners[2].x + trfMatrix[1][1] * board.corners[2].y + trfMatrix[1][2]);
-                    LOG4CXX_DEBUG(logger, "Calculated matrix \n" << trfMatrix << " will transform \n" << board.corners[2] << " to \n" << br);
-                    double lambda = cv::norm(TGT_CORNERS[2]) / cv::norm(br);
+                    cv::Point2f& bbr = board.corners[2];
+                    auto warpPt = [](const cv::Point2f& pt, cv::Mat_<float> trfMat)
+                    {
+                        return cv::Point2f(
+                                           trfMat[0][0] * pt.x + trfMat[0][1] * pt.y + trfMat[0][2],
+                                           trfMat[1][0] * pt.x + trfMat[1][1] * pt.y + trfMat[1][2]
+                                           );
+                    };
+                    cv::Point2f br = warpPt(bbr, trfMatrix);
+                    LOG4CXX_DEBUG(logger, "Calculated matrix \n" << trfMatrix << " will transform \n"
+                                  << board.corners[0] << " -> " << warpPt(board.corners[0], trfMatrix)
+                                  << board.corners[1] << " -> " << warpPt(board.corners[1], trfMatrix)
+                                  << board.corners[2] << " -> " << warpPt(board.corners[2], trfMatrix)
+                                  << board.corners[3] << " -> " << warpPt(board.corners[3], trfMatrix)
+                                  );
+                    double lambda = cv::norm(roi.br()) / cv::norm(br);
                     trfMatrix = trfMatrix * lambda;
-                    br.x = trfMatrix[0][0] * board.corners[2].x + trfMatrix[0][1] * board.corners[2].y + trfMatrix[0][2];
-                    br.y = trfMatrix[1][0] * board.corners[2].x + trfMatrix[1][1] * board.corners[2].y + trfMatrix[1][2];
+                    br = warpPt(bbr, trfMatrix);
 
-                    LOG4CXX_DEBUG(logger, "Scaled matrix (lambda=" << lambda << ")\n" << trfMatrix << " will transform \n" << board.corners[2] << " to \n" << br);
+                    LOG4CXX_DEBUG(logger, "Scaled matrix \n" << trfMatrix << " will transform \n"
+                                  << board.corners[0] << " -> " << warpPt(board.corners[0], trfMatrix)
+                                  << board.corners[1] << " -> " << warpPt(board.corners[1], trfMatrix)
+                                  << board.corners[2] << " -> " << warpPt(board.corners[2], trfMatrix)
+                                  << board.corners[3] << " -> " << warpPt(board.corners[3], trfMatrix)
+                                  );
+                    warpedImg = 0;
                     auto tgtImg = warpedImg(roi);
-                    cv::warpPerspective(inputImg, tgtImg, trfMatrix, tgtImg.size(), cv::InterpolationFlags::INTER_LINEAR);
-                    cv::imshow(OUTPUT_WINDOW_NAME, tgtImg);
+                    cv::warpPerspective(inputImg, tgtImg, trfMatrix, roi.size(), cv::InterpolationFlags::INTER_LINEAR);
+                    cv::imshow(OUTPUT_WINDOW_NAME, warpedImg);
                     for (int i = 0; i < 4; ++i)
                     {
                         cv::line(inputImg, board.corners[i], board.corners[(i+1) % 4], FIXED_COLOR);

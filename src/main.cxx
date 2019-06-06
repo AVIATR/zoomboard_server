@@ -801,39 +801,28 @@ namespace
                     }
                     TGT_CORNERS = {roi.tl(), cv::Point2f(roi.x + roi.width, roi.y), roi.br(), cv::Point2f(roi.x, roi.y + roi.height)};
 
-                    LOG4CXX_DEBUG(logger, "Need to transform \n" << board.corners << " to \n" << TGT_CORNERS);
                     trfMatrix = cv::getPerspectiveTransform(board.corners, TGT_CORNERS);
 
-                    //Calculate the constant in the transformation
-                    cv::Point2f& bbr = board.corners[2];
+#ifndef NDEBUG
+                    LOG4CXX_DEBUG(logger, "Need to transform \n" << board.corners << " to \n" << TGT_CORNERS);
                     auto warpPt = [](const cv::Point2f& pt, cv::Mat_<float> trfMat)
                     {
+                        float scaleFactor = trfMat[2][0] * pt.x + trfMat[2][1] * pt.y + trfMat[2][2];
                         return cv::Point2f(
-                                           trfMat[0][0] * pt.x + trfMat[0][1] * pt.y + trfMat[0][2],
-                                           trfMat[1][0] * pt.x + trfMat[1][1] * pt.y + trfMat[1][2]
+                                           (trfMat[0][0] * pt.x + trfMat[0][1] * pt.y + trfMat[0][2]) / scaleFactor,
+                                           (trfMat[1][0] * pt.x + trfMat[1][1] * pt.y + trfMat[1][2]) / scaleFactor
                                            );
                     };
-                    cv::Point2f br = warpPt(bbr, trfMatrix);
-                    LOG4CXX_DEBUG(logger, "Calculated matrix \n" << trfMatrix << " will transform \n"
-                                  << board.corners[0] << " -> " << warpPt(board.corners[0], trfMatrix)
-                                  << board.corners[1] << " -> " << warpPt(board.corners[1], trfMatrix)
-                                  << board.corners[2] << " -> " << warpPt(board.corners[2], trfMatrix)
-                                  << board.corners[3] << " -> " << warpPt(board.corners[3], trfMatrix)
+                    LOG4CXX_DEBUG(logger, "Calculated matrix \n" << trfMatrix << " will transform "
+                                  << board.corners[0] << " -> " << warpPt(board.corners[0], trfMatrix) << ", "
+                                  << board.corners[1] << " -> " << warpPt(board.corners[1], trfMatrix) << ","
+                                  << board.corners[2] << " -> " << warpPt(board.corners[2], trfMatrix) << ","
+                                  << board.corners[3] << " -> " << warpPt(board.corners[3], trfMatrix) << "."
                                   );
-                    double lambda = cv::norm(roi.br()) / cv::norm(br);
-                    trfMatrix = trfMatrix * lambda;
-                    br = warpPt(bbr, trfMatrix);
-
-                    LOG4CXX_DEBUG(logger, "Scaled matrix \n" << trfMatrix << " will transform \n"
-                                  << board.corners[0] << " -> " << warpPt(board.corners[0], trfMatrix)
-                                  << board.corners[1] << " -> " << warpPt(board.corners[1], trfMatrix)
-                                  << board.corners[2] << " -> " << warpPt(board.corners[2], trfMatrix)
-                                  << board.corners[3] << " -> " << warpPt(board.corners[3], trfMatrix)
-                                  );
+#endif
                     warpedImg = 0;
-                    auto tgtImg = warpedImg(roi);
-                    cv::warpPerspective(inputImg, tgtImg, trfMatrix, roi.size(), cv::InterpolationFlags::INTER_LINEAR);
-                    cv::imshow(OUTPUT_WINDOW_NAME, warpedImg);
+                    cv::warpPerspective(inputImg, warpedImg, trfMatrix, warpedImg.size(), cv::InterpolationFlags::INTER_LINEAR);
+                    cv::imshow(OUTPUT_WINDOW_NAME, warpedImg(roi));
                     for (int i = 0; i < 4; ++i)
                     {
                         cv::line(inputImg, board.corners[i], board.corners[(i+1) % 4], FIXED_COLOR);

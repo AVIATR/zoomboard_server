@@ -11,6 +11,7 @@
 #include <stdio.h>
 #include <memory>
 #include <vector>
+#include <string>
 #include "Media.hpp"
 #include "LibAVWrappers.hpp"
 
@@ -27,23 +28,17 @@ namespace avtools
 
         /// Ctor that opens a stream
         /// @param[in] url stream URL
-        /// @param[in] codecParam video codec parameters
-        /// @param[in] timebase timebase for the video stream
-        /// @param[in] opts a dictionary with optional stream & codec
-        /// @throw StreamError if stream cannot be opened for writing
-        [[deprecated]]
-        MediaWriter(
-            const std::string& url,
-            const CodecParameters& codecParam,
-            const TimeBaseType& timebase,
-            Dictionary& opts
-        );
-
+        /// @param[in] codecOpts video codec parameters
+        /// @param[in] muxerOpts video-related multiplexer options
+        /// @throw MediaError if unable to open the writer
         MediaWriter(
             const std::string& url,
             Dictionary& codecOpts,
             Dictionary& muxerOpts
         );
+
+        /// Move ctor
+        MediaWriter(MediaWriter&& writer);
 
         ///Dtor
         ~MediaWriter();
@@ -60,6 +55,8 @@ namespace avtools
         /// @param[in] Frame frame data to write
         void write(const Frame& frame);
 
+        /// Returns the url this writer is writing to
+        std::string url() const;
     private:
         class Implementation;                       ///< implementation class
         std::unique_ptr<Implementation> pImpl_;     ///< ptr to implementation

@@ -66,11 +66,10 @@ namespace
     /// @throw std::runtime_error if there is an issue parsing the configuration file.
     Options getOptions(const std::string& configFile, const std::string& type);
 
-    /// Removes all files with a given prefix
-    /// @param[in] prefix file prefix
-    /// @param[in] path path to search
-    /// @param[in] assumeYes if true, do not confirm erasure
-    void removeFiles(const std::string& prefix, const bfs::path& path=".", bool assumeYes=false);
+    /// Sets up the output location, creates the folder if it doesn ot exist, asks to remove pre-existing stream files etc.
+    /// @param[in] url output url
+    /// @param[in] doAssumeYes if true, assume yes to all questions and do not prompy
+    void setUpOutputLocations(const bfs::path& url, bool doAssumeYes);
 
     /// @class Synchronization thread to signal end and capture exceptions from threads
     class ProgramStatus
@@ -231,38 +230,44 @@ int main(int argc, const char * argv[])
     }
     const std::string configFile = vm["config_file"].as<std::string>();
     LOG4CXX_INFO(logger, "Provided configuration file: " << configFile);
-//    const std::string USAGE = "Usage: " + std::string(argv[0]) + " <config_file.json>";
-//    // Parse command line arguments & load the config file
-//    if (argc != 2)
-//    {
-//        LOG4CXX_FATAL(logger, "Incorrect number of arguments." << USAGE);
-//        return EXIT_FAILURE;
-//    }
-//    const std::string configFile = argv[1];
     //Until we convert to C++17, we need to use boost::filesystem to check for file. Afterwards, we can use std::filesystem
     if ( !bfs::exists( configFile ) )
     {
-        LOG4CXX_FATAL(logger, "Could not find configuration file " << configFile);
-        return EXIT_FAILURE;
+        throw std::runtime_error("Could not find configuraion file " + configFile);
     }
 
-    Options inOpts = getOptions(configFile, "input");
-    Options outOptsLR = getOptions(configFile, "output_lr");
-    Options outOptsHR = getOptions(configFile, "output_hr");
-    // Remove old stream files if they're around
-    removeFiles(bfs::path(outOptsLR.url).stem().string(), bfs::path(outOptsLR.url).root_path(), vm.count("yes"));
-    removeFiles(bfs::path(outOptsHR.url).stem().string(), bfs::path(outOptsHR.url).root_path(), vm.count("yes"));
-
-
-    // -----------
-    // Open the reader and start the thread to read frames
-    // -----------
+    std::map<std::string, Options> opts = getOptions(configFile);
+    auto pInputOpts = opts.find("input");
+    if (pInputOpts == opts.end())
+    {
+        throw std::runtime_error("Could not find input options in the configuration file.");
+    }
+    Options& inOpts = pInputOpts->second;
     LOG4CXX_DEBUG(logger, "Input options are:\n" << inOpts << "\nOpening reader.");
     avtools::MediaReader rdr(inOpts.url, inOpts.muxerOpts);
     const AVStream* pVidStr = rdr.getVideoStream();
     LOG4CXX_DEBUG(logger, "Input stream info:\n" << avtools::getStreamInfo(pVidStr) );
+
+    //Done with input options, treat all remaining options as output options
+    opts.erase(pInputOpts);
+
+//    Options inOpts = getOptions(configFile, "input");
+//      Options outOptsLR = getOptions(configFile, "output_lr");
+//    Options outOptsHR = getOptions(configFile, "output_hr");
+    // Create output folders if they do not exixt
+    for (const auto& opt: opts)
+    {
+        setUpOutputLocations(opt.second.url, vm.count("yes"));
+    }
+//    setUpOutputLocations(outOptsLR.url, vm.count("yes"));
+//    setUpOutputLocations(outOptsHR.url, vm.count("yes"));
+
+    std::vector<std::thread> threads;
+    // -----------
+    // Open the reader and start the thread to read frames
+    // -----------
     auto pInFrame = avtools::ThreadsafeFrame::Get(pVidStr->codecpar->width, pVidStr->codecpar->height, PIX_FMT, pVidStr->time_base);
-    std::thread readerThread = threadedRead(pInFrame, rdr);
+    threads.emplace_back(threadedRead(pInFrame, rdr));
 
     // -----------
     // Add perspective transformer
@@ -273,37 +278,50 @@ int main(int argc, const char * argv[])
     cv::destroyAllWindows();
 
     // -----------
-    // Open the writer
-    // -----------
-    LOG4CXX_DEBUG(logger, "LR Output options are:\n" << outOptsLR << "\nOpening low-res writer.");
-    avtools::MediaWriter writerLR(outOptsLR.url, outOptsLR.codecOpts, outOptsLR.muxerOpts);
-    const AVStream* pOutStrLR = writerLR.getStream();
-
-    LOG4CXX_DEBUG(logger, "HR Output options are:\n" << outOptsHR << "\nOpening hi-res writer.");
-    avtools::MediaWriter writerHR(outOptsHR.url, outOptsHR.codecOpts, outOptsHR.muxerOpts);
-    const AVStream* pOutStrHR = writerHR.getStream();
-
-    // -----------
     // Start warping & writing
     // -----------
     // Start the warper thread
     auto pTrfFrame = avtools::ThreadsafeFrame::Get(pVidStr->codecpar->width, pVidStr->codecpar->height, PIX_FMT, pVidStr->time_base);
     assert( (AV_NOPTS_VALUE == (*pTrfFrame)->best_effort_timestamp) && (AV_NOPTS_VALUE == (*pTrfFrame)->pts) );
-    std::thread warperThread = threadedWarp(pInFrame, pTrfFrame, trfMatrix);
+    threads.emplace_back(threadedWarp(pInFrame, pTrfFrame, trfMatrix));
+
+    // -----------
+    // Open the writer(s)
+    // -----------
+    std::vector<avtools::MediaWriter> writers;
+    for (auto& opt: opts)
+    {
+        Options& outOpt = opt.second;
+        LOG4CXX_DEBUG(logger, "Output options for url " << outOpt.url << " are:\n" << outOpt << "\nOpening writer.");
+        writers.emplace_back(outOpt.url, outOpt.codecOpts, outOpt.muxerOpts);
+        LOG4CXX_DEBUG(logger, "Output stream info:\n" << avtools::getStreamInfo(writers.back().getStream()));
+        threads.emplace_back( threadedWrite(pTrfFrame, writers.back()) );
+    }
+//    LOG4CXX_DEBUG(logger, "LR Output options are:\n" << outOptsLR << "\nOpening low-res writer.");
+//    avtools::MediaWriter writerLR(outOptsLR.url, outOptsLR.codecOpts, outOptsLR.muxerOpts);
+//    const AVStream* pOutStrLR = writerLR.getStream();
+//
+//    LOG4CXX_DEBUG(logger, "HR Output options are:\n" << outOptsHR << "\nOpening hi-res writer.");
+//    avtools::MediaWriter writerHR(outOptsHR.url, outOptsHR.codecOpts, outOptsHR.muxerOpts);
+//    const AVStream* pOutStrHR = writerHR.getStream();
 
     // Start the writer thread
-    LOG4CXX_DEBUG(logger, "Lo-res output stream info:\n" << avtools::getStreamInfo(pOutStrLR));
-    std::thread writerThreadLR = threadedWrite(pTrfFrame, writerLR);
-    LOG4CXX_DEBUG(logger, "Hi-res output stream info:\n" << avtools::getStreamInfo(pOutStrHR));
-    std::thread writerThreadHR = threadedWrite(pTrfFrame, writerHR);
+//    LOG4CXX_DEBUG(logger, "Lo-res output stream info:\n" << avtools::getStreamInfo(pOutStrLR));
+//    std::thread writerThreadLR = threadedWrite(pTrfFrame, writerLR);
+//    LOG4CXX_DEBUG(logger, "Hi-res output stream info:\n" << avtools::getStreamInfo(pOutStrHR));
+//    std::thread writerThreadHR = threadedWrite(pTrfFrame, writerHR);
 
     // -----------
     // Cleanup
     // -----------
-    readerThread.join();    //wait for reader thread to finish
-    warperThread.join();    //wait for the warper thread to finish
-    writerThreadLR.join();    //wait for writer to finish
-    writerThreadHR.join();    //wait for writer to finish
+    for (auto& thread: threads)
+    {
+        thread.join();  //wait for all threads to finish
+    }
+//    readerThread.join();    //wait for reader thread to finish
+//    warperThread.join();    //wait for the warper thread to finish
+//    writerThreadLR.join();    //wait for writer to finish
+//    writerThreadHR.join();    //wait for writer to finish
 
     if (g_Status.hasExceptions())
     {
@@ -376,31 +394,46 @@ namespace
         return opts;
     }
 
-    void removeFiles(const std::string& prefix, const bfs::path& path/*="."*/, bool assumeYes/*=false*/)
+    void setUpOutputLocations(const bfs::path& url, bool doAssumeYes)
     {
-        bfs::path pathParsed = (path.empty() ? "." : path);
-        LOG4CXX_DEBUG(logger, "Will remove " << prefix << "* from " << pathParsed);
-        if( !bfs::exists(pathParsed) || !bfs::is_directory(pathParsed))
+        bfs::path parent = url.parent_path();
+        if (url.has_parent_path())
         {
-            throw std::runtime_error(pathParsed.string() + " is not a valid path.");
+            //See if it exists or needs to be created
+            if ( !bfs::exists(parent) )
+            {
+                LOG4CXX_DEBUG(logger, "Url folder " << parent << " does not exist. Creating.");
+                if (!bfs::create_directory(parent))
+                {
+                    throw std::runtime_error("Unable to create folder " + parent.string());
+                }
+            }
+            else if (!bfs::is_directory(parent))
+            {
+                throw std::runtime_error(parent.string() + " exists, and is not a folder.");
+            }
         }
+        assert(bfs::is_directory(parent));
+        // Remove old stream files if they're around
+        bfs::path prefix = url.stem();
+        LOG4CXX_DEBUG(logger, "Will remove " << prefix << "* from " << parent);
         std::vector<bfs::path> filesToRemove;
-        for (bfs::recursive_directory_iterator it(pathParsed), itEnd; it != itEnd; ++it)
+        for (bfs::recursive_directory_iterator it(parent), itEnd; it != itEnd; ++it)
         {
             if( bfs::is_regular_file(*it)
-               && (it->path().filename().string().find(prefix) == 0)
+               && (it->path().filename().string().find(prefix.string()) == 0)
                && ((it->path().extension().string() == ".ts") || (it->path().extension().string() == ".m3u8") )
                )
             {
                 filesToRemove.push_back(it->path());
             }
         }
-        if ( (not assumeYes) && (not filesToRemove.empty()) )
+        if ( (not doAssumeYes) && (not filesToRemove.empty()) )
         {
             char answer;
             do
             {
-                std::cout << "Found " << filesToRemove.size() << " files starting with " << prefix << ". Remove them? [y/n]" << std::endl;
+                std::cout << "Found " << filesToRemove.size() << " files starting with '" << prefix << "'. Remove them? [y/n]" << std::endl;
                 std::cin >> answer;
             }
             while( !std::cin.fail() && (answer != 'y') && (answer != 'Y')&& (answer != 'n') && (answer != 'N') );
@@ -430,6 +463,7 @@ namespace
         std::for_each(filesToRemove.begin(), filesToRemove.end(), [](const bfs::path& p){bfs::remove(p);});
 #endif
     }
+
 
     // ---------------------------
     // Program Status Definitions
@@ -569,7 +603,7 @@ namespace
         return std::thread([pFrame, &writer](){
             try
             {
-                log4cxx::MDC::put("threadname", "writer");
+                log4cxx::MDC::put("threadname", "writer: " + writer.url());
                 avtools::TimeType ts = AV_NOPTS_VALUE;
                 while (!g_Status.isEnded())
                 {

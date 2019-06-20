@@ -532,7 +532,11 @@ namespace avtools
                 encodeFrame(filtFrame_.get());
             }
         }
-        
+
+        std::string url() const
+        {
+            return formatCtx_->url;
+        }
     };  //::avtools::MediaWriter::Implementation
     
     //=====================================================
@@ -549,6 +553,10 @@ namespace avtools
     {
         assert( pImpl_);
     }
+
+    MediaWriter::MediaWriter(MediaWriter&& writer):
+    pImpl_(std::move(writer.pImpl_))
+    {}
 
     MediaWriter::~MediaWriter() = default;
 
@@ -583,4 +591,11 @@ namespace avtools
         assert(frame.type == AVMediaType::AVMEDIA_TYPE_VIDEO);
         write(frame.get(), frame.timebase);
     }
+
+    std::string MediaWriter::url() const
+    {
+        assert(pImpl_);
+        return pImpl_->url();
+    }
+
 }   //::avtools

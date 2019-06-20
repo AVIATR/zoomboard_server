@@ -1,5 +1,10 @@
 #!/bin/bash
+
+#remove old files
+rm hls/stream*
+
 #start streaming
+
 if [[ "$OSTYPE" == "linux-gnu" ]]; then
     # *Nix
     ffmpeg -f video4linux2 \    #webcam format

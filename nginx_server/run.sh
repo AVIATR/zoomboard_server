@@ -1,13 +1,36 @@
 #!/bin/bash
 set -e
 
+STREAM_FOLDER='.'
+function USAGE {
+    echo "Usage: run.sh [-h] [-s stream_folder]"
+}
 #remove any old files
-rm hls/*
+while getopts ":hs:" opt; do
+    case ${opt} in
+        h ) # process option a
+            USAGE
+            ;;
+        
+        s ) # process option t
+            STREAM_FOLDER=${OPTARG}
+            ;;
+        
+        \? )
+            echo "Invalid Option: -$OPTARG" 1>&2
+            USAGE
+            exit 1
+        ;;
+    esac
+done
+shift $((OPTIND -1))
 
+echo "Stream folder is ${STREAM_FOLDER}"
 #launch nginx server
-docker run -d --name my_server \
+docker run -d --name zoombrd \
     -v$(pwd)/nginx.conf:/etc/nginx/nginx.conf \
-    -v$(pwd):/usr/share/nginx \
+    -v$(pwd)/html:/usr/share/nginx/html \
+    -v"$(pwd)/${STREAM_FOLDER}":/usr/share/nginx/hls \
     -p8080:8080 \
     tiangolo/nginx-rtmp
 

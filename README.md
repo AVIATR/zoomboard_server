@@ -10,6 +10,21 @@ This project depends on a few external open-source libraries:
 ## Configuration file
 This json file provides the necessary configuration options (input device, resolution, frame rate, other ffmpeg options). as well as the output url and options. For details about the input device options, see the [ffmpeg faq about capture devices](https://trac.ffmpeg.org/wiki/Capture/Webcam).
 
+## Local testing
+The zoomboard server is started via
+
+    zoomboard_server config.json
+    
+The nginx server can be started using the script in the nginx folder. The usage is
+
+    run.sh -s <stream_folder>
+    
+where `stream_folder` is the folder where the server is putting the stream files. The streams can then be played via ffplay:
+
+    ffplay http://127.0.0.1:8080/hls/stream_lr.m3u8
+    
+To play the hi-res stream, replace the URL above with `http://127.0.0.1:8080/hls/stream_hr.m3u8`
+
 
 ## References
 ### LibAV Reading/Writing Process

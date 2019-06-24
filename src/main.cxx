@@ -62,9 +62,9 @@ namespace
 
     /// Parses a json file to retrieve the output configuration to use
     /// @param[in] configFile name of configuration file to read
-    /// @return output options to use for the writer
+    /// @return set of output options to use for the reader & writer(s)
     /// @throw std::runtime_error if there is an issue parsing the configuration file.
-    Options getOptions(const std::string& configFile, const std::string& type);
+    std::map<std::string, Options> getOptions(const bfs::path& coonfigFile);
 
     /// Sets up the output location, creates the folder if it doesn ot exist, asks to remove pre-existing stream files etc.
     /// @param[in] url output url
@@ -200,6 +200,7 @@ int main(int argc, const char * argv[])
     ("version,v", "program version")
     ("config_file", bpo::value<std::string>(), "path of configuration file to use for video options")
     ("yes,y", "answer 'yes' to every prompt'")
+    ("adjust,a", "adjust perspective")
     ;
 
     try
@@ -251,43 +252,23 @@ int main(int argc, const char * argv[])
     //Done with input options, treat all remaining options as output options
     opts.erase(pInputOpts);
 
-//    Options inOpts = getOptions(configFile, "input");
-//      Options outOptsLR = getOptions(configFile, "output_lr");
-//    Options outOptsHR = getOptions(configFile, "output_hr");
     // Create output folders if they do not exixt
     for (const auto& opt: opts)
     {
         setUpOutputLocations(opt.second.url, vm.count("yes"));
     }
-//    setUpOutputLocations(outOptsLR.url, vm.count("yes"));
-//    setUpOutputLocations(outOptsHR.url, vm.count("yes"));
 
-    std::vector<std::thread> threads;
     // -----------
     // Open the reader and start the thread to read frames
     // -----------
+    std::vector<std::thread> threads;
     auto pInFrame = avtools::ThreadsafeFrame::Get(pVidStr->codecpar->width, pVidStr->codecpar->height, PIX_FMT, pVidStr->time_base);
     threads.emplace_back(threadedRead(pInFrame, rdr));
 
     // -----------
-    // Add perspective transformer
-    // -----------
-    LOG4CXX_DEBUG(logger, "Opening transformer");
-    // Get corners of the board
-    cv::Mat trfMatrix = getPerspectiveTransformationMatrix(pInFrame);
-    cv::destroyAllWindows();
-
-    // -----------
-    // Start warping & writing
-    // -----------
-    // Start the warper thread
-    auto pTrfFrame = avtools::ThreadsafeFrame::Get(pVidStr->codecpar->width, pVidStr->codecpar->height, PIX_FMT, pVidStr->time_base);
-    assert( (AV_NOPTS_VALUE == (*pTrfFrame)->best_effort_timestamp) && (AV_NOPTS_VALUE == (*pTrfFrame)->pts) );
-    threads.emplace_back(threadedWarp(pInFrame, pTrfFrame, trfMatrix));
-
+    // Start writing
     // -----------
     // Open the writer(s)
-    // -----------
     std::vector<avtools::MediaWriter> writers;
     for (auto& opt: opts)
     {
@@ -295,21 +276,31 @@ int main(int argc, const char * argv[])
         LOG4CXX_DEBUG(logger, "Output options for url " << outOpt.url << " are:\n" << outOpt << "\nOpening writer.");
         writers.emplace_back(outOpt.url, outOpt.codecOpts, outOpt.muxerOpts);
         LOG4CXX_DEBUG(logger, "Output stream info:\n" << avtools::getStreamInfo(writers.back().getStream()));
-        threads.emplace_back( threadedWrite(pTrfFrame, writers.back()) );
     }
-//    LOG4CXX_DEBUG(logger, "LR Output options are:\n" << outOptsLR << "\nOpening low-res writer.");
-//    avtools::MediaWriter writerLR(outOptsLR.url, outOptsLR.codecOpts, outOptsLR.muxerOpts);
-//    const AVStream* pOutStrLR = writerLR.getStream();
-//
-//    LOG4CXX_DEBUG(logger, "HR Output options are:\n" << outOptsHR << "\nOpening hi-res writer.");
-//    avtools::MediaWriter writerHR(outOptsHR.url, outOptsHR.codecOpts, outOptsHR.muxerOpts);
-//    const AVStream* pOutStrHR = writerHR.getStream();
 
-    // Start the writer thread
-//    LOG4CXX_DEBUG(logger, "Lo-res output stream info:\n" << avtools::getStreamInfo(pOutStrLR));
-//    std::thread writerThreadLR = threadedWrite(pTrfFrame, writerLR);
-//    LOG4CXX_DEBUG(logger, "Hi-res output stream info:\n" << avtools::getStreamInfo(pOutStrHR));
-//    std::thread writerThreadHR = threadedWrite(pTrfFrame, writerHR);
+    // Start writing (and correct perspective if requested)
+    if (vm.count("adjust") > 0) //perspective adjustment requested
+    {
+        // Get corners of the board
+        cv::Mat trfMatrix = getPerspectiveTransformationMatrix(pInFrame);
+        // Start the warper thread if need be
+        auto pTrfFrame = avtools::ThreadsafeFrame::Get(pVidStr->codecpar->width, pVidStr->codecpar->height, PIX_FMT, pVidStr->time_base);
+        assert( (AV_NOPTS_VALUE == (*pTrfFrame)->best_effort_timestamp) && (AV_NOPTS_VALUE == (*pTrfFrame)->pts) );
+        threads.emplace_back(threadedWarp(pInFrame, pTrfFrame, trfMatrix));
+        // add writers to writer perspective transformed frames
+        for (auto &writer : writers)
+        {
+            threads.emplace_back( threadedWrite(pTrfFrame, writer) );
+        }
+    }
+    else
+    {
+        // add writers to writer input frames
+        for (auto &writer : writers)
+        {
+            threads.emplace_back( threadedWrite(pInFrame, writer) );
+        }
+    }
 
     // -----------
     // Cleanup
@@ -318,10 +309,6 @@ int main(int argc, const char * argv[])
     {
         thread.join();  //wait for all threads to finish
     }
-//    readerThread.join();    //wait for reader thread to finish
-//    warperThread.join();    //wait for the warper thread to finish
-//    writerThreadLR.join();    //wait for writer to finish
-//    writerThreadHR.join();    //wait for writer to finish
 
     if (g_Status.hasExceptions())
     {
@@ -347,8 +334,9 @@ namespace
     }
 
     /// Parses a property tree and fills the options structure
-    void getOptsFromTree(const boost::property_tree::ptree& tree, Options& opts)
+    Options getOptsFromTree(const boost::property_tree::ptree& tree)
     {
+        Options opts;
         for (auto& branch : tree)
         {
             if ( strequals(branch.first, "url") )
@@ -370,26 +358,18 @@ namespace
                 }
             }
         }
+        return opts;
     }
 
-    Options getOptions(const std::string& configFile, const std::string& type)
+    std::map<std::string, Options> getOptions(const bfs::path& configFile)
     {
-        boost::property_tree::ptree tree;
-        boost::property_tree::read_json(configFile, tree);
-        Options opts;
-        bool isOptsFound=false;
-        // Read input options
+        namespace bpt = ::boost::property_tree;
+        bpt::ptree tree;
+        bpt::read_json(configFile.string(), tree);
+        std::map<std::string, Options> opts;
         for (auto& subtree: tree)
         {
-            if ( strequals(subtree.first, type) )
-            {
-                isOptsFound = true;
-                getOptsFromTree(subtree.second, opts);
-            }
-        }
-        if (!isOptsFound)
-        {
-            throw std::runtime_error("Couldn't find " + type + " options in " + configFile);
+            opts.emplace(subtree.first, getOptsFromTree(subtree.second));
         }
         return opts;
     }
@@ -412,6 +392,10 @@ namespace
             {
                 throw std::runtime_error(parent.string() + " exists, and is not a folder.");
             }
+        }
+        else
+        {
+            parent = ".";
         }
         assert(bfs::is_directory(parent));
         // Remove old stream files if they're around
@@ -720,7 +704,7 @@ namespace
     };  //<anon>::Board
 
     /// Mouse callback for the window, replacing cv::MouseCallback
-    static void OnMouse(int event, int x, int y, int flags, void *userdata)
+    void onMouse(int event, int x, int y, int flags, void *userdata)
     {
         Board* pC = static_cast<Board*>(userdata);
         assert(pC->draggedPt < (int) pC->corners.size());
@@ -775,7 +759,7 @@ namespace
         board.draggedPt = -1;
         cv::namedWindow(INPUT_WINDOW_NAME);
         cv::namedWindow(OUTPUT_WINDOW_NAME);
-        cv::setMouseCallback(INPUT_WINDOW_NAME, OnMouse, &board);
+        cv::setMouseCallback(INPUT_WINDOW_NAME, onMouse, &board);
 
         //Initialize
         {

@@ -198,9 +198,10 @@ int main(int argc, const char * argv[])
     programDesc.add_options()
     ("help,h", "produce help message")
     ("version,v", "program version")
-    ("config_file", bpo::value<std::string>(), "path of configuration file to use for video options")
+    ("config_file", bpo::value<std::string>()->default_value("config.json"), "path of configuration file to use for video options")
     ("yes,y", "answer 'yes' to every prompt'")
     ("adjust,a", "adjust perspective")
+    ("output_folder,o", bpo::value<std::string>()->default_value("."), "output folder to write the streams")
     ;
 
     try
@@ -224,17 +225,21 @@ int main(int argc, const char * argv[])
         return EXIT_SUCCESS;
     }
 
-    if (!vm.count("config_file"))
-    {
-        LOG4CXX_FATAL(logger, "No configuration file provided!\n" << programDesc)
-        return EXIT_FAILURE;
-    }
+    assert(vm.count("config_file"));
+    assert(vm.count("output_folder"));
+
+
+//    if (!vm.count("config_file"))
+//    {
+//        LOG4CXX_FATAL(logger, "No configuration file provided!\n" << programDesc)
+//        return EXIT_FAILURE;
+//    }
     const std::string configFile = vm["config_file"].as<std::string>();
     LOG4CXX_INFO(logger, "Provided configuration file: " << configFile);
     //Until we convert to C++17, we need to use boost::filesystem to check for file. Afterwards, we can use std::filesystem
     if ( !bfs::exists( configFile ) )
     {
-        throw std::runtime_error("Could not find configuraion file " + configFile);
+        throw std::runtime_error("Could not find configuration file " + configFile);
     }
 
     std::map<std::string, Options> opts = getOptions(configFile);
@@ -253,8 +258,10 @@ int main(int argc, const char * argv[])
     opts.erase(pInputOpts);
 
     // Create output folders if they do not exixt
-    for (const auto& opt: opts)
+    const bfs::path outputFolder(vm["output_folder"].as<std::string>());
+    for (auto& opt: opts)
     {
+        opt.second.url = (outputFolder / bfs::path(opt.second.url)).string();
         setUpOutputLocations(opt.second.url, vm.count("yes"));
     }
 
@@ -376,26 +383,20 @@ namespace
 
     void setUpOutputLocations(const bfs::path& url, bool doAssumeYes)
     {
+        assert(url.has_parent_path());
         bfs::path parent = url.parent_path();
-        if (url.has_parent_path())
+        //See if it exists or needs to be created
+        if ( !bfs::exists(parent) )
         {
-            //See if it exists or needs to be created
-            if ( !bfs::exists(parent) )
+            LOG4CXX_DEBUG(logger, "Url folder " << parent << " does not exist. Creating.");
+            if (!bfs::create_directory(parent))
             {
-                LOG4CXX_DEBUG(logger, "Url folder " << parent << " does not exist. Creating.");
-                if (!bfs::create_directory(parent))
-                {
-                    throw std::runtime_error("Unable to create folder " + parent.string());
-                }
-            }
-            else if (!bfs::is_directory(parent))
-            {
-                throw std::runtime_error(parent.string() + " exists, and is not a folder.");
+                throw std::runtime_error("Unable to create folder " + parent.string());
             }
         }
-        else
+        else if (!bfs::is_directory(parent))
         {
-            parent = ".";
+            throw std::runtime_error(parent.string() + " exists, and is not a folder.");
         }
         assert(bfs::is_directory(parent));
         // Remove old stream files if they're around

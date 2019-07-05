@@ -145,14 +145,12 @@ namespace
     }
 
     /// Maintains communication between threads re: exceptions & program end
-    static ProgramStatus g_Status;
+    ProgramStatus g_Status;
 
-    /// Used to signal that the reader thread has frames ready, so writed can wait
-//    static ReadySignal g_ReaderReady;
     // Initialize logger
     log4cxx::LoggerPtr logger(log4cxx::Logger::getLogger("zoombrd"));
 
-    static const std::string INPUT_DRIVER = "avfoundation";
+    /// Pixel format to process images in OpenCV
     static const AVPixelFormat PIX_FMT = AVPixelFormat::AV_PIX_FMT_BGR24;
 } //::<anon>
 
@@ -228,19 +226,13 @@ int main(int argc, const char * argv[])
     assert(vm.count("config_file"));
     assert(vm.count("output_folder"));
 
-
-//    if (!vm.count("config_file"))
-//    {
-//        LOG4CXX_FATAL(logger, "No configuration file provided!\n" << programDesc)
-//        return EXIT_FAILURE;
-//    }
     const std::string configFile = vm["config_file"].as<std::string>();
-    LOG4CXX_INFO(logger, "Provided configuration file: " << configFile);
     //Until we convert to C++17, we need to use boost::filesystem to check for file. Afterwards, we can use std::filesystem
     if ( !bfs::exists( configFile ) )
     {
         throw std::runtime_error("Could not find configuration file " + configFile);
     }
+    LOG4CXX_INFO(logger, "Using configuration file: " << configFile);
 
     std::map<std::string, Options> opts = getOptions(configFile);
     auto pInputOpts = opts.find("input");
@@ -518,26 +510,6 @@ namespace
         exceptions_.clear();
     }
 
-//    // -------------------------
-//    // ReadySignal definitions
-//    // -------------------------
-//    ReadySignal::ReadySignal():
-//    mutex_(),
-//    isReady_(false)
-//    {}
-//
-//    ReadySignal::~ReadySignal() = default;
-//
-//    void ReadySignal::ready()
-//    {
-//        isReady_.store(true);
-//    }
-//
-//    bool ReadySignal::isReady() const
-//    {
-//        return isReady_.load();
-//    }
-
     // -------------------------
     // Threaded reader & writer functions
     // -------------------------
@@ -633,9 +605,6 @@ namespace
         });
     }
 
-    // ---------------------------
-    // Transformer Definitions
-    // ---------------------------
     /// Converts a cv::point to a string representation
     /// @param[in] pt the point to represent
     /// @return a string representation of the point in the form (pt.x, pt.y)

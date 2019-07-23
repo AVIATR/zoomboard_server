@@ -80,7 +80,7 @@ if (Boost_FOUND)
 endif()
 
 # Find OpenCV
-find_package(OpenCV COMPONENTS core imgproc highgui REQUIRED)
+find_package(OpenCV COMPONENTS core imgproc highgui aruco REQUIRED)
 if (OpenCV_FOUND)
     message(STATUS "OpenCV Found")
     message(STATUS "OpenCV_LIBRARIES = ${OpenCV_LIBRARIES}")

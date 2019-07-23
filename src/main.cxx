@@ -187,7 +187,7 @@ int main(int argc, const char * argv[])
     logger->setLevel(debugLevel);
 
     //Parse command line options
-    static const std::string PROGRAM_NAME = bfs::path(argv[0]).filename().string() + " v" + std::to_string(RTMP_SERVER_VERSION_MAJOR) + "." + std::to_string(RTMP_SERVER_VERSION_MINOR);
+    static const std::string PROGRAM_NAME = bfs::path(argv[0]).filename().string() + " v" + std::to_string(ZOOMBOARD_SERVER_VERSION_MAJOR) + "." + std::to_string(ZOOMBOARD_SERVER_VERSION_MINOR);
 
     bpo::options_description programDesc(PROGRAM_NAME + " options");
     bpo::positional_options_description posDesc;

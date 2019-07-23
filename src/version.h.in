@@ -4,11 +4,11 @@
 //  Created by Ender Tekin on 01/17/18.
 //
 //
-#ifndef rtmp_server_version_h
-#define rtmp_server_version_h
+#ifndef zoomboard_server_version_h
+#define zoomboard_server_version_h
 
-#define RTMP_SERVER_VERSION_MAJOR @PROJECT_VERSION_MAJOR@
-#define RTMP_SERVER_VERSION_MINOR @PROJECT_VERSION_MINOR@
-#define RTMP_SERVER_VERSION @PROJECT_VERSION@
+#define ZOOMBOARD_SERVER_VERSION_MAJOR @PROJECT_VERSION_MAJOR@
+#define ZOOMBOARD_SERVER_VERSION_MINOR @PROJECT_VERSION_MINOR@
+#define ZOOMBOARD_SERVER_VERSION @PROJECT_VERSION@
 
-#endif //rtmp_server_version_h
+#endif //zoomboard_server_version_h

@@ -10,19 +10,30 @@ This project depends on a few external open-source libraries:
 ## Configuration file
 This json file provides the necessary configuration options (input device, resolution, frame rate, other ffmpeg options). as well as the output url and options. For details about the input device options, see the [ffmpeg faq about capture devices](https://trac.ffmpeg.org/wiki/Capture/Webcam).
 
-## Local testing
+## Calibration
+The system is set up initially by creating the markers, using the `create_markers` executable. To run, simply use
+
+    ./create_markers <marker_file.json>
+
+where `marker_file.json` is a json file to save the markers to. This also saves an image called `arucobrd_2x2.png` to the same folder. This image is then used for camera calibration using the `calibrate_camera` executable. To calibrate, simply use
+
+    ./calibrate_camera -m <marker_file.json> <calibration_file.json>
+
+where `marker_file.json` is the output of the `create_markers` process, and `calibration_file.json` is the output of camera calibration that contains the calibration matrix and distortion coefficients.
+
+## Local testing of the server
 The zoomboard server is started via
 
-    zoomboard_server config.json
-    
+    ./zoomboard_server config.json
+
 The nginx server can be started using the script in the nginx folder. The usage is
 
-    run.sh -s <stream_folder>
-    
+    ./run.sh -s <stream_folder>
+
 where `stream_folder` is the folder where the server is putting the stream files. The streams can then be played via ffplay:
 
     ffplay http://127.0.0.1:8080/hls/stream_lr.m3u8
-    
+
 To play the hi-res stream, replace the URL above with `http://127.0.0.1:8080/hls/stream_hr.m3u8`
 
 

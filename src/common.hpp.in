@@ -1,0 +1,37 @@
+//
+//  common.hpp
+//  zoomboard_server
+//
+//  Created by Ender Tekin on 8/6/19.
+//
+
+#ifndef common_hpp
+#define common_hpp
+
+#define ZOOMBOARD_SERVER_VERSION_MAJOR @PROJECT_VERSION_MAJOR@
+#define ZOOMBOARD_SERVER_VERSION_MINOR @PROJECT_VERSION_MINOR@
+#define ZOOMBOARD_SERVER_VERSION @PROJECT_VERSION@
+
+#include <string>
+
+static const int MARKER_SIZE = 4;
+static const int MARKER_X = 2;
+static const int MARKER_Y = 2;
+static constexpr float MARKER_SEP = 0.05f;
+static constexpr float MARKER_LEN = 0.05f;
+
+
+#ifndef NDEBUG
+/// Returns the type of an opencv matrix - for debugging
+/// From https://stackoverflow.com/questions/10167534/how-to-find-out-what-type-of-a-mat-object-is-with-mattype-in-opencv
+/// @param[in] matrix type, obtained by calling the type() method of a cv::Mat
+/// @return a string that matches the matrix type, of the format CV_XCY, where X is the depth and Y is the # of channels
+std::string type2str(int type);
+#endif
+        
+/// Prompt for a yes/no answer
+/// @param[in] prompt prompt text
+/// @return true if the answer is Y or y, false if n or N
+bool promptYesNo(const std::string& prompt);
+
+#endif /* common_hpp */

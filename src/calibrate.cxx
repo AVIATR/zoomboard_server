@@ -1,5 +1,8 @@
 //
 //  calibrate.cxx
+//  Uses aruco markers to calibrate
+//  Also see https://docs.opencv.org/4.1.0/d9/d6a/group__aruco.html#gab9159aa69250d8d3642593e508cb6baa and
+//  https://docs.opencv.org/4.1.0/d9/d0c/group__calib3d.html#ga687a1ab946686f0d85ae0363b5af1d7b
 //
 //  Created by Ender Tekin on 7/23/19.
 //
@@ -15,32 +18,41 @@
 #include <log4cxx/consoleappender.h>
 #include <log4cxx/fileappender.h>
 #include <log4cxx/patternlayout.h>
-#include <boost/property_tree/ptree.hpp>
-#include <boost/property_tree/json_parser.hpp>
-#include <boost/filesystem.hpp>
+#include <boost/filesystem.hpp> //Until we convert to C++17, we need to use boost::filesystem to check for file. Afterwards, we can use std::filesystem
 #include <boost/program_options.hpp>
 #include "opencv2/core.hpp"
 #include "opencv2/imgproc.hpp"
 #include "opencv2/highgui.hpp"
 #include "opencv2/aruco.hpp"
-#include "version.h"
+#include "common.hpp"
 
 namespace
 {
     namespace bfs = ::boost::filesystem;
     namespace bpo = ::boost::program_options;
 
-    /// Asks the user to choose the corners of the board and undoes the
-    /// perspective transform. This can then be used with
-    /// cv::warpPerspective to correct the perspective of the video.
-    /// also @see https://docs.opencv.org/3.1.0/da/d54/group__imgproc__transform.html
-    /// @param[in] pFrame input frame that will be updated by the reader thread
-    /// @return a perspective transformation matrix
-    /// TODO: Should also return the roi so we send a smaller framesize if need be (no need to send extra data)
-    cv::Mat_<double> getCalibrationMatrix(const cv::Mat& img);
+    /// Reads the board used for calibration from the marker file
+    /// @param[in] markerFile file that containst the info re: the board & marker dictionary
+    /// @return the grid board used for calibration
+    const cv::Ptr<cv::aruco::GridBoard> getArucoBoard(const std::string& markerFile);
+
+    /// Calculates the camera calibration matrix
+    /// @param[out] cameraMatrix calculated camera matrix
+    /// @param[out] set of distribution coefficients
+    /// @param[in] brd grid of aruco markers used in calibration
+    /// @return final re-projection error.
+    [[maybe_unused]]
+    double getCalibrationMatrix(cv::Mat& cameraMatrix, cv::Mat& distCoeffs, const cv::Ptr<cv::aruco::GridBoard> brd);
 
     // Initialize logger
     log4cxx::LoggerPtr logger(log4cxx::Logger::getLogger("calibration"));
+
+    /// Saves calibration outputs
+    /// @param[in] calibrationFile file to save to
+    /// @param[in] dict dictionary of aruco markers that were used in calibration
+    /// @param[in] cameraMatrix camera matrix
+    /// @param[in] distCoeffs vector of distortion coefficients
+    void saveCalibrationOutputs(bfs::path calibrationFile, const cv::Ptr<cv::aruco::Dictionary> dict, const cv::Mat& cameraMatrix, const cv::Mat& distCoeffs);
 
 } //::<anon>
 
@@ -79,6 +91,7 @@ int main(int argc, const char * argv[])
     programDesc.add_options()
     ("help,h", "produce help message")
     ("version,v", "program version")
+    ("marker_file,m", bpo::value<std::string>()->default_value("marker_file.json"), "json file containing the marker dictionary to use for calibration")
     ("calibration_file", bpo::value<std::string>()->default_value("calibration.json"), "path of configuration file to write calibration results to")
     ;
 
@@ -103,97 +116,126 @@ int main(int argc, const char * argv[])
         return EXIT_SUCCESS;
     }
 
-    assert(vm.count("calibration_file"));
+    assert(vm.count("calibration_file") && vm.count("marker_file"));
+
+    // Load the aruco dictionary to use for calibration
+    const std::string markerFile = vm["marker_file"].as<std::string>();
+    if (!bfs::exists(markerFile))
+    {
+        throw std::runtime_error("A marker file could not be found, please check path or use create_markers to create one.");
+    }
+    auto gridBrd = getArucoBoard(markerFile);
 
     const std::string calibrationFile = vm["calibration_file"].as<std::string>();
-    //Until we convert to C++17, we need to use boost::filesystem to check for file. Afterwards, we can use std::filesystem
     if ( bfs::exists( calibrationFile ) )
     {
-        char answer;
-        do
-        {
-            std::cout << "Calibration file " << calibrationFile << " exists and will be overwritten. Proceed? (Y/N)\n";
-            std::cin >> answer;
-        }
-        while( !std::cin.fail() && (answer != 'y') && (answer != 'Y')&& (answer != 'n') && (answer != 'N') );
-
-        if ((answer == 'n') || (answer == 'N'))
+        bool doOverwrite = promptYesNo("Calibration file " + calibrationFile + " exists and will be overwritten. Proceed?");
+        if (not doOverwrite)
         {
             return EXIT_SUCCESS;
         }
+        LOG4CXX_DEBUG(logger, "Calibration file will be overwritten.");
     }
 
     // -----------
     // Start the calibration process
     // -----------
-    // Open the writer(s)
+    cv::Mat cameraMatrix, distCoeffs;
+    try
+    {
+        getCalibrationMatrix(cameraMatrix, distCoeffs, gridBrd);
+    }
+    catch (std::exception &err)
+    {
+        LOG4CXX_ERROR(logger, err.what());
+    }
 
+    //Save marker configuration and calibration matrix:
+    saveCalibrationOutputs(calibrationFile, gridBrd->dictionary, cameraMatrix, distCoeffs);
+
+    // Cleanup
     LOG4CXX_DEBUG(logger, "Exiting successfully...");
     return EXIT_SUCCESS;
 }
 
 namespace
 {
-    /// Compare two strings in a case-insensitive manner
-    /// @return true if two strings are the same
-    bool strequals(const std::string& a, const std::string& b)
+    const cv::Ptr<cv::aruco::GridBoard> getArucoBoard(const std::string& markerFile)
     {
-        return std::equal(a.begin(), a.end(),
-                          b.begin(), b.end(),
-                          [](char a, char b) {
-                              return tolower(a) == tolower(b);
-                          });
+        cv::FileStorage fs(markerFile, cv::FileStorage::READ);
+        cv::Mat markers;
+        int markerSz;
+        fs["markers"] >> markers;
+        fs["marker_size"] >> markerSz;
+        auto pDict = cv::makePtr<cv::aruco::Dictionary>(markers, markerSz);
+        return cv::aruco::GridBoard::create(MARKER_X, MARKER_Y, MARKER_LEN, MARKER_SEP, pDict);
     }
 
-    /// Parses a property tree and fills the options structure
-    Options getOptsFromTree(const boost::property_tree::ptree& tree)
+    double getCalibrationMatrix(cv::Mat& cameraMatrix, cv::Mat& distCoeffs, const cv::Ptr<cv::aruco::GridBoard> gridBrd)
     {
-        Options opts;
-        for (auto& branch : tree)
+        // Open camera
+        cv::VideoCapture camera;
+        //TODO: Read the default size from the config.json file
+        camera.set(cv::CAP_PROP_FRAME_WIDTH, 1024);
+        camera.set(cv::CAP_PROP_FRAME_HEIGHT, 768);
+        if ( !camera.open(0) )
         {
-            if ( strequals(branch.first, "url") )
-            {
-                opts.url = branch.second.get_value<std::string>();
-            }
-            if ( strequals(branch.first, "codec_options") )
-            {
-                for (auto &leaf : branch.second)
-                {
-                    opts.codecOpts.add(leaf.first, leaf.second.get_value<std::string>());
-                }
-            }
-            if ( strequals(branch.first, "muxer_options") )
-            {
-                for (auto &leaf : branch.second)
-                {
-                    opts.muxerOpts.add(leaf.first, leaf.second.get_value<std::string>());
-                }
-            }
+            throw std::runtime_error("Unable to open default webcam");
         }
-        return opts;
-    }
 
-    std::map<std::string, Options> getOptions(const bfs::path& configFile)
-    {
-        namespace bpt = ::boost::property_tree;
-        bpt::ptree tree;
-        bpt::read_json(configFile.string(), tree);
-        std::map<std::string, Options> opts;
-        for (auto& subtree: tree)
+        // Read frames
+        cv::Mat inputImg(camera.get(cv::CAP_PROP_FRAME_HEIGHT), camera.get(cv::CAP_PROP_FRAME_WIDTH), CV_8UC3);
+
+        double projError = std::numeric_limits<double>::infinity();
+        std::vector<std::vector<cv::Point2f> > corners;
+        std::vector<int> ids, counter;
+        while ( (cv::waitKey(20) < 0) && (projError > 0.1) )
         {
-            opts.emplace(subtree.first, getOptsFromTree(subtree.second));
+            std::vector<std::vector<cv::Point2f> > frameCorners;
+            std::vector<int> frameIds;
+            // detect markers
+            if (!camera.read(inputImg))
+            {
+                throw std::runtime_error("Unable to read frames from default camera");
+            }
+            cv::imshow("Camera image", inputImg);
+            cv::aruco::detectMarkers(inputImg, gridBrd->dictionary, frameCorners, frameIds, cv::aruco::DetectorParameters::create());
+            int n = (int) frameIds.size();
+            assert(frameCorners.size() == n);
+            if (0 == n)
+            {
+                LOG4CXX_DEBUG(logger, "Could not detected any markers.");
+                continue;
+            }
+            corners.insert(corners.end(), frameCorners.begin(), frameCorners.end());
+            ids.insert(ids.end(), frameIds.begin(), frameIds.end());
+            counter.push_back(n);
+            // calibrate based on detected markers
+            projError = cv::aruco::calibrateCameraAruco(corners,ids, counter, gridBrd, inputImg.size(), cameraMatrix, distCoeffs);
+            LOG4CXX_DEBUG(logger, "Detected " << n << " new markers. Projection error = " << projError);
         }
-        return opts;
+        if (counter.empty())
+        {
+            throw std::runtime_error("No markers found for calibration");
+        }
+        return projError;
     }
 
-
-    /// Converts a cv::point to a string representation
-    /// @param[in] pt the point to represent
-    /// @return a string representation of the point in the form (pt.x, pt.y)
-    template<typename T>
-    std::string to_string(const cv::Point_<T>& pt)
+    void saveCalibrationOutputs(bfs::path calibrationFile, const cv::Ptr<cv::aruco::Dictionary> dict, const cv::Mat& cameraMatrix, const cv::Mat& distCoeffs)
     {
-        return "(" + std::to_string(pt.x) + "," + std::to_string(pt.y) + ")";
+        cv::FileStorage fs(calibrationFile.string(), cv::FileStorage::WRITE);
+        fs << "aruco" << "{";
+        fs << "markers" << dict->bytesList;
+        fs << "marker_size" << dict->markerSize;
+        fs << "}";
+        fs << "camera_matrix" << cameraMatrix;
+        fs << "distortion_coefficients" << distCoeffs;
+#ifndef NDEBUG
+        LOG4CXX_DEBUG(logger, fs.releaseAndGetString());
+#else
+        fs.release();
+#endif
     }
+
 
 }   //::<anon>

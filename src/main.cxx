@@ -33,7 +33,7 @@ extern "C" {
 #include <libswscale/swscale.h>
 #include <libswresample/swresample.h>
 }
-#include "version.h"
+#include "common.hpp"
 #include "MediaReader.hpp"
 #include "MediaWriter.hpp"
 #include "Media.hpp"
@@ -405,40 +405,34 @@ namespace
                 filesToRemove.push_back(it->path());
             }
         }
-        if ( (not doAssumeYes) && (not filesToRemove.empty()) )
+        if ( !filesToRemove.empty() )
         {
-            char answer;
-            do
+            LOG4CXX_INFO(logger, "Found " << filesToRemove.size() << " files starting with '" << prefix << "'"<< std::endl);
+            if ( doAssumeYes || promptYesNo("Remove them?") )
             {
-                std::cout << "Found " << filesToRemove.size() << " files starting with '" << prefix << "'. Remove them? [y/n]" << std::endl;
-                std::cin >> answer;
-            }
-            while( !std::cin.fail() && (answer != 'y') && (answer != 'Y')&& (answer != 'n') && (answer != 'N') );
+#ifndef NDEBUG
+                int nFilesRemoved = 0;
+                std::for_each(filesToRemove.begin(), filesToRemove.end(),
+                              [&nFilesRemoved](const bfs::path& p)
+                              {
+                                  if (bfs::remove(p))
+                                  {
+                                      LOG4CXX_DEBUG(logger, "Removed: " << p);
+                                      ++nFilesRemoved;
+                                  }
+                                  else
+                                  {
+                                      LOG4CXX_DEBUG(logger, "Could not remove: " << p);
+                                  }
+                              });
+                LOG4CXX_DEBUG(logger, "Removed " << nFilesRemoved << " of " << filesToRemove.size() << " files.");
+#else
+                std::for_each(filesToRemove.begin(), filesToRemove.end(), [](const bfs::path& p){bfs::remove(p);});
+#endif
 
-            if ((answer == 'n') || (answer == 'N'))
-            {
-                return;
             }
         }
-#ifndef NDEBUG
-        int nFilesRemoved = 0;
-        std::for_each(filesToRemove.begin(), filesToRemove.end(),
-                      [&nFilesRemoved](const bfs::path& p)
-                      {
-                          if (bfs::remove(p))
-                          {
-                              LOG4CXX_DEBUG(logger, "Removed: " << p);
-                              ++nFilesRemoved;
-                          }
-                          else
-                          {
-                              LOG4CXX_DEBUG(logger, "Could not remove: " << p);
-                          }
-                      });
-        LOG4CXX_DEBUG(logger, "Removed " << nFilesRemoved << " of " << filesToRemove.size() << " files.");
-#else
-        std::for_each(filesToRemove.begin(), filesToRemove.end(), [](const bfs::path& p){bfs::remove(p);});
-#endif
+
     }
 
 

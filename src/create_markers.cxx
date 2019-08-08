@@ -54,7 +54,7 @@ int main(int argc, const char * argv[])
 #ifndef NDEBUG
     const auto debugLevel = log4cxx::Level::getDebug();
     //Also add file appender - see https://stackoverflow.com/questions/13967382/how-to-set-log4cxx-properties-without-property-file
-    log4cxx::AppenderPtr fileAppenderPtr(new log4cxx::FileAppender(layoutPtr, "marker_log.txt", false));
+    log4cxx::AppenderPtr fileAppenderPtr(new log4cxx::FileAppender(layoutPtr, fs::path(argv[0]).filename().string()+".log", false));
     log4cxx::BasicConfigurator::configure(fileAppenderPtr);
 #else
     const auto debugLevel = log4cxx::Level::getWarn();

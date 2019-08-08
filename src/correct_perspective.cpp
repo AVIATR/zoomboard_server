@@ -123,6 +123,7 @@ namespace
                 default:
                     break;
             }
+            LOG4CXX_DEBUG(logger, "Marked " << pC->corners_.size() << " points.");
         }
     public:
 
@@ -133,12 +134,12 @@ namespace
             cv::setMouseCallback(INPUT_WINDOW_NAME, OnMouse, this);
         }
 
-        const std::vector<cv::Point2f>& getCorners(const cv::Mat& img)
+        std::vector<cv::Point2f> getCorners(const cv::Mat& img)
         {
             return corners_;
         }
 
-        void draw(const cv::Mat& img)
+        void draw(cv::Mat& img)
         {
             for (int i = 0; i < corners_.size(); ++i)
             {
@@ -227,7 +228,7 @@ namespace
             return GetOuterCorners(corners_);
         }
 
-        void draw(const cv::Mat& img)
+        void draw(cv::Mat& img)
         {
             auto outerCorners = GetOuterCorners(corners_);
             const int nCorners = (int) outerCorners.size();
@@ -251,7 +252,6 @@ cv::Mat_<double> getPerspectiveTransformationMatrix(std::weak_ptr<const avtools:
     cv::Mat inputImg, warpedImg;
     std::vector<cv::Point2f> TGT_CORNERS;
     avtools::Frame intermediateFrame;
-    cv::namedWindow(INPUT_WINDOW_NAME);
     cv::namedWindow(OUTPUT_WINDOW_NAME);
 
     //Initialize
@@ -292,6 +292,7 @@ cv::Mat_<double> getPerspectiveTransformationMatrix(std::weak_ptr<const avtools:
             const float IMG_ASPECT = (float) inputImg.cols / (float) inputImg.rows;
             corners = boardFinder.getCorners(inputImg);
             int nCorners = (int) corners.size();
+            LOG4CXX_DEBUG(logger, "Detected " << nCorners << " corners.");
             if (nCorners == 4)
             {
                 //Calculate aspect ratio:
@@ -367,12 +368,12 @@ cv::Mat_<double> getPerspectiveTransformationMatrix(std::weak_ptr<const avtools:
 
 cv::Mat_<double> getPerspectiveTransformationMatrixFromUser(std::weak_ptr<const avtools::ThreadsafeFrame> pFrame)
 {
-    UserDirectedBoardFinder boardFinder;
-    return getPerspectiveTransformationMatrix(pFrame, boardFinder);
+    cv::namedWindow(INPUT_WINDOW_NAME);
+    return getPerspectiveTransformationMatrix(pFrame, UserDirectedBoardFinder());
 }
 
 cv::Mat_<double> getPerspectiveTransformationMatrixFromMarkers(std::weak_ptr<const avtools::ThreadsafeFrame> pFrame, const std::string& calibrationFile)
 {
-    MarkerDirectedBoardFinder boardFinder(calibrationFile);
-    return getPerspectiveTransformationMatrix(pFrame, boardFinder);
+    cv::namedWindow(INPUT_WINDOW_NAME);
+    return getPerspectiveTransformationMatrix(pFrame, MarkerDirectedBoardFinder(calibrationFile));
 }

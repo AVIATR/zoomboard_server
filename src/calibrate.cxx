@@ -69,7 +69,7 @@ int main(int argc, const char * argv[])
     log4cxx::BasicConfigurator::configure(consoleAppPtr);
 #ifndef NDEBUG
     //Also add file appender - see https://stackoverflow.com/questions/13967382/how-to-set-log4cxx-properties-without-property-file
-    log4cxx::AppenderPtr fileAppenderPtr(new log4cxx::FileAppender(layoutPtr, "calibration_log.txt", false));
+    log4cxx::AppenderPtr fileAppenderPtr(new log4cxx::FileAppender(layoutPtr, fs::path(argv[0]).filename().string()+".log", false));
     log4cxx::BasicConfigurator::configure(fileAppenderPtr);
     // Set log level.
     const auto debugLevel = log4cxx::Level::getDebug();

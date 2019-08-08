@@ -122,7 +122,7 @@ int main(int argc, const char * argv[])
     log4cxx::AppenderPtr consoleAppPtr(new log4cxx::ConsoleAppender(layoutPtr));
     log4cxx::BasicConfigurator::configure(consoleAppPtr);
     //Also add file appender - see https://stackoverflow.com/questions/13967382/how-to-set-log4cxx-properties-without-property-file
-    log4cxx::AppenderPtr fileAppenderPtr(new log4cxx::FileAppender(layoutPtr, "logfile.txt", false));
+    log4cxx::AppenderPtr fileAppenderPtr(new log4cxx::FileAppender(layoutPtr, fs::path(argv[0]).filename().string()+".log", false));
     log4cxx::BasicConfigurator::configure(fileAppenderPtr);
 
     // Set log level.
@@ -235,12 +235,15 @@ int main(int argc, const char * argv[])
         cv::Mat trfMatrix;
         if (vm.count("calibration_file"))
         {
-
+            LOG4CXX_DEBUG(logger, "Calibration file found, will use Aruco markers for perspective adjustment.");
+            trfMatrix = getPerspectiveTransformationMatrixFromMarkers(pInFrame, vm["calibration_file"].as<std::string>());
         }
         else
         {
+            LOG4CXX_DEBUG(logger, "Please click on the four corners of the board for perspective adjustment.");
             trfMatrix = getPerspectiveTransformationMatrixFromUser(pInFrame);
         }
+        assert(!trfMatrix.empty());
         // Start the warper thread if need be
         auto pTrfFrame = avtools::ThreadsafeFrame::Get(pVidStr->codecpar->width, pVidStr->codecpar->height, PIX_FMT, pVidStr->time_base);
         assert( (AV_NOPTS_VALUE == (*pTrfFrame)->best_effort_timestamp) && (AV_NOPTS_VALUE == (*pTrfFrame)->pts) );
@@ -265,7 +268,10 @@ int main(int argc, const char * argv[])
     // -----------
     for (auto& thread: threads)
     {
-        thread.join();  //wait for all threads to finish
+        if (thread.joinable())
+        {
+            thread.join();  //wait for all threads to finish
+        }
     }
 
     if (g_Status.hasExceptions())

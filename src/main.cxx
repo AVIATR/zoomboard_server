@@ -141,18 +141,18 @@ int main(int argc, const char * argv[])
 
     bpo::options_description programDesc(PROGRAM_NAME + " options");
     bpo::positional_options_description posDesc;
-    bpo::variables_map vm;
     posDesc.add("config_file", -1);
     programDesc.add_options()
     ("help,h", "produce help message")
     ("version,v", "program version")
     ("yes,y", "answer 'yes' to every prompt'")
     ("adjust,a", "adjust perspective")
+    ("calibration_file,c", bpo::value<std::string>(), "calibration file to use if using aruco markers, created by calibrate_camera. If none is provided, and the adjust option is also passed, then a window is provided for the user to click on the corners of the board.")
     ("output_folder,o", bpo::value<std::string>()->default_value("."), "output folder to write the streams")
-    ("calibration_file,c", "calibration file to use if using aruco markers, create by calibrate_camera. If none is provided, and the adjust option is also passed, then a window is provided for the user to click on the corners of the board.")
     ("config_file", bpo::value<std::string>()->default_value("config.json"), "path of configuration file to use for video options")
     ;
 
+    bpo::variables_map vm;
     try
     {
         bpo::store(bpo::command_line_parser(argc, argv).options(programDesc).positional(posDesc).run(), vm);

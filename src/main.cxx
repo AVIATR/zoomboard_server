@@ -18,15 +18,15 @@
 #include <log4cxx/logger.h>
 #include <log4cxx/basicconfigurator.h>
 #include <log4cxx/consoleappender.h>
+#ifndef NDEBUG
 #include <log4cxx/fileappender.h>
+#endif
 #include <log4cxx/patternlayout.h>
 #include <boost/property_tree/ptree.hpp>
 #include <boost/property_tree/json_parser.hpp>
-#include <boost/filesystem.hpp>
 #include <boost/program_options.hpp>
 #include "opencv2/core.hpp"
 #include "opencv2/imgproc.hpp"
-#include "opencv2/highgui.hpp"
 extern "C" {
 #include <libavformat/avformat.h>
 #include <libavcodec/avcodec.h>
@@ -38,11 +38,13 @@ extern "C" {
 #include "MediaWriter.hpp"
 #include "Media.hpp"
 #include "ThreadsafeFrame.hpp"
+#include "ProgramStatus.hpp"
+#include "correct_perspective.hpp"
+#include "libav2opencv.hpp"
 
 using avtools::MediaError;
 namespace
 {
-    namespace bfs = ::boost::filesystem;
     namespace bpo = ::boost::program_options;
     /// @class A structure containing the pertinent ffmpeg options
     /// See https://www.ffmpeg.org/ffmpeg-devices.html for the list of codec & stream options
@@ -53,6 +55,10 @@ namespace
         avtools::Dictionary muxerOpts;      ///< muxer options
     };
 
+    /// Prints options stream
+    /// @param[in] stream output stream
+    /// @param[in] opts options structure
+    /// @return a reference to the output stream
     inline std::ostream& operator<<(std::ostream& stream, const Options& opts)
     {
         return ( stream << "url:" << opts.url << "\n"
@@ -64,37 +70,12 @@ namespace
     /// @param[in] configFile name of configuration file to read
     /// @return set of output options to use for the reader & writer(s)
     /// @throw std::runtime_error if there is an issue parsing the configuration file.
-    std::map<std::string, Options> getOptions(const bfs::path& coonfigFile);
+    std::map<std::string, Options> getOptions(const std::string& coonfigFile);
 
     /// Sets up the output location, creates the folder if it doesn ot exist, asks to remove pre-existing stream files etc.
     /// @param[in] url output url
     /// @param[in] doAssumeYes if true, assume yes to all questions and do not prompy
-    void setUpOutputLocations(const bfs::path& url, bool doAssumeYes);
-
-    /// @class Synchronization thread to signal end and capture exceptions from threads
-    class ProgramStatus
-    {
-    private:
-        mutable std::mutex mutex_;                      ///< mutex to use when adding exceptions
-        std::atomic_bool doEnd_;                        ///< set to true to signal program should end
-        std::vector<std::exception_ptr> exceptions_;    ///< list of stored exceptions
-    public:
-        /// Ctor
-        ProgramStatus();
-        /// Dtor
-        ~ProgramStatus();
-        /// Used to signal the program to end.
-        inline void end();
-        /// @return true if the program has been signaled to end
-        inline bool isEnded() const;
-        /// Used to log an exception from a thread. This also signals program end
-        /// @param[in] an exception pointer. This will be stored and later logged at program end
-        void addException(std::exception_ptr errPtr);
-        /// @return true if there are logged exceptions
-        bool hasExceptions() const;
-        /// Logs all the exceptions. Once logged, all exceptions are cleared.
-        void logExceptions();
-    };  //::<anon>::ProgramStatus
+    void setUpOutputLocations(const fs::path& url, bool doAssumeYes);
 
     /// Function that starts a stream reader that reads from a stream int to a threaded frame
     /// @param[in,out] pFrame threadsafe frame to write to
@@ -108,15 +89,6 @@ namespace
     /// @return a new thread that reads frames from the input frame and writes to an output file
     std::thread threadedWrite(std::weak_ptr<const avtools::ThreadsafeFrame> pFrame, avtools::MediaWriter& writer);
 
-    /// Asks the user to choose the corners of the board and undoes the
-    /// perspective transform. This can then be used with
-    /// cv::warpPerspective to correct the perspective of the video.
-    /// also @see https://docs.opencv.org/3.1.0/da/d54/group__imgproc__transform.html
-    /// @param[in] pFrame input frame that will be updated by the reader thread
-    /// @return a perspective transformation matrix
-    /// TODO: Should also return the roi so we send a smaller framesize if need be (no need to send extra data)
-    cv::Mat_<double> getPerspectiveTransformationMatrix(std::weak_ptr<const avtools::ThreadsafeFrame> pFrame);
-
     /// Launches a thread that creates a warped matrix of the input frame according to the given transform matrix
     /// @param[in] pInFrame input frame
     /// @param[in, out] pWarpedFrame transformed output frame
@@ -124,35 +96,13 @@ namespace
     /// @return a new thread that runs in the background, updates the warpedFrame when a new inFrame is available.
     std::thread threadedWarp(std::weak_ptr<const avtools::ThreadsafeFrame> pInFrame, std::weak_ptr<avtools::ThreadsafeFrame> pWarpedFrame, const cv::Mat& trfMatrix);
 
-    /// Wraps a cv::mat around libav frames. Note that the matrix is just wrapped around the
-    /// existing data, so data is not cloned. Make sure that the matrix is done being used before reading new
-    /// data into the frame.
-    /// @param[in] frame a decoded video frame
-    /// @return a cv::mat wrapper around the frame data
-    inline const cv::Mat getImage(const avtools::Frame& frame)
-    {
-        return cv::Mat(frame->height, frame->width, CV_8UC3, frame->data[0], frame->linesize[0]);
-    }
-
-    /// Wraps a cv::mat around libav frames. Note that the matrix is just wrapped around the
-    /// existing data, so data is not cloned. Make sure that the matrix is done being used before reading new
-    /// data into the frame.
-    /// @param[in] frame a decoded video frame
-    /// @return a cv::mat wrapper around the frame data
-    inline cv::Mat getImage(avtools::Frame& frame)
-    {
-        return cv::Mat(frame->height, frame->width, CV_8UC3, frame->data[0], frame->linesize[0]);
-    }
-
-    /// Maintains communication between threads re: exceptions & program end
-    ProgramStatus g_Status;
-
     // Initialize logger
     log4cxx::LoggerPtr logger(log4cxx::Logger::getLogger("zoombrd"));
 
-    /// Pixel format to process images in OpenCV
-    static const AVPixelFormat PIX_FMT = AVPixelFormat::AV_PIX_FMT_BGR24;
 } //::<anon>
+
+/// Maintains communication between threads re: exceptions & program end
+ProgramStatus g_Status(logger);
 
 // The command we are trying to implement for one output stream is
 // sudo avconv -f video4linux2 -r 5 -s hd1080 -i /dev/video0 \
@@ -187,7 +137,7 @@ int main(int argc, const char * argv[])
     logger->setLevel(debugLevel);
 
     //Parse command line options
-    static const std::string PROGRAM_NAME = bfs::path(argv[0]).filename().string() + " v" + std::to_string(ZOOMBOARD_SERVER_VERSION_MAJOR) + "." + std::to_string(ZOOMBOARD_SERVER_VERSION_MINOR);
+    static const std::string PROGRAM_NAME = fs::path(argv[0]).filename().string() + " v" + std::to_string(ZOOMBOARD_SERVER_VERSION_MAJOR) + "." + std::to_string(ZOOMBOARD_SERVER_VERSION_MINOR);
 
     bpo::options_description programDesc(PROGRAM_NAME + " options");
     bpo::positional_options_description posDesc;
@@ -196,10 +146,11 @@ int main(int argc, const char * argv[])
     programDesc.add_options()
     ("help,h", "produce help message")
     ("version,v", "program version")
-    ("config_file", bpo::value<std::string>()->default_value("config.json"), "path of configuration file to use for video options")
     ("yes,y", "answer 'yes' to every prompt'")
     ("adjust,a", "adjust perspective")
     ("output_folder,o", bpo::value<std::string>()->default_value("."), "output folder to write the streams")
+    ("calibration_file,c", "calibration file to use if using aruco markers, create by calibrate_camera. If none is provided, and the adjust option is also passed, then a window is provided for the user to click on the corners of the board.")
+    ("config_file", bpo::value<std::string>()->default_value("config.json"), "path of configuration file to use for video options")
     ;
 
     try
@@ -228,7 +179,7 @@ int main(int argc, const char * argv[])
 
     const std::string configFile = vm["config_file"].as<std::string>();
     //Until we convert to C++17, we need to use boost::filesystem to check for file. Afterwards, we can use std::filesystem
-    if ( !bfs::exists( configFile ) )
+    if ( !fs::exists( configFile ) )
     {
         throw std::runtime_error("Could not find configuration file " + configFile);
     }
@@ -250,10 +201,10 @@ int main(int argc, const char * argv[])
     opts.erase(pInputOpts);
 
     // Create output folders if they do not exixt
-    const bfs::path outputFolder(vm["output_folder"].as<std::string>());
+    const fs::path outputFolder(vm["output_folder"].as<std::string>());
     for (auto& opt: opts)
     {
-        opt.second.url = (outputFolder / bfs::path(opt.second.url)).string();
+        opt.second.url = (outputFolder / fs::path(opt.second.url)).string();
         setUpOutputLocations(opt.second.url, vm.count("yes"));
     }
 
@@ -281,7 +232,15 @@ int main(int argc, const char * argv[])
     if (vm.count("adjust") > 0) //perspective adjustment requested
     {
         // Get corners of the board
-        cv::Mat trfMatrix = getPerspectiveTransformationMatrix(pInFrame);
+        cv::Mat trfMatrix;
+        if (vm.count("calibration_file"))
+        {
+
+        }
+        else
+        {
+            trfMatrix = getPerspectiveTransformationMatrixFromUser(pInFrame);
+        }
         // Start the warper thread if need be
         auto pTrfFrame = avtools::ThreadsafeFrame::Get(pVidStr->codecpar->width, pVidStr->codecpar->height, PIX_FMT, pVidStr->time_base);
         assert( (AV_NOPTS_VALUE == (*pTrfFrame)->best_effort_timestamp) && (AV_NOPTS_VALUE == (*pTrfFrame)->pts) );
@@ -360,11 +319,11 @@ namespace
         return opts;
     }
 
-    std::map<std::string, Options> getOptions(const bfs::path& configFile)
+    std::map<std::string, Options> getOptions(const std::string& configFile)
     {
         namespace bpt = ::boost::property_tree;
         bpt::ptree tree;
-        bpt::read_json(configFile.string(), tree);
+        bpt::read_json(configFile, tree);
         std::map<std::string, Options> opts;
         for (auto& subtree: tree)
         {
@@ -373,31 +332,31 @@ namespace
         return opts;
     }
 
-    void setUpOutputLocations(const bfs::path& url, bool doAssumeYes)
+    void setUpOutputLocations(const fs::path& url, bool doAssumeYes)
     {
         assert(url.has_parent_path());
-        bfs::path parent = url.parent_path();
+        fs::path parent = url.parent_path();
         //See if it exists or needs to be created
-        if ( !bfs::exists(parent) )
+        if ( !fs::exists(parent) )
         {
             LOG4CXX_DEBUG(logger, "Url folder " << parent << " does not exist. Creating.");
-            if (!bfs::create_directory(parent))
+            if (!fs::create_directory(parent))
             {
                 throw std::runtime_error("Unable to create folder " + parent.string());
             }
         }
-        else if (!bfs::is_directory(parent))
+        else if (!fs::is_directory(parent))
         {
             throw std::runtime_error(parent.string() + " exists, and is not a folder.");
         }
-        assert(bfs::is_directory(parent));
+        assert(fs::is_directory(parent));
         // Remove old stream files if they're around
-        bfs::path prefix = url.stem();
+        fs::path prefix = url.stem();
         LOG4CXX_DEBUG(logger, "Will remove " << prefix << "* from " << parent);
-        std::vector<bfs::path> filesToRemove;
-        for (bfs::recursive_directory_iterator it(parent), itEnd; it != itEnd; ++it)
+        std::vector<fs::path> filesToRemove;
+        for (fs::recursive_directory_iterator it(parent), itEnd; it != itEnd; ++it)
         {
-            if( bfs::is_regular_file(*it)
+            if( fs::is_regular_file(*it)
                && (it->path().filename().string().find(prefix.string()) == 0)
                && ((it->path().extension().string() == ".ts") || (it->path().extension().string() == ".m3u8") )
                )
@@ -413,9 +372,9 @@ namespace
 #ifndef NDEBUG
                 int nFilesRemoved = 0;
                 std::for_each(filesToRemove.begin(), filesToRemove.end(),
-                              [&nFilesRemoved](const bfs::path& p)
+                              [&nFilesRemoved](const fs::path& p)
                               {
-                                  if (bfs::remove(p))
+                                  if (fs::remove(p))
                                   {
                                       LOG4CXX_DEBUG(logger, "Removed: " << p);
                                       ++nFilesRemoved;
@@ -433,75 +392,6 @@ namespace
             }
         }
 
-    }
-
-
-    // ---------------------------
-    // Program Status Definitions
-    // ---------------------------
-    ProgramStatus::ProgramStatus():
-    mutex_(),
-    doEnd_(false),
-    exceptions_()
-    {
-    }
-
-    ProgramStatus::~ProgramStatus()
-    {
-        logExceptions();
-    }
-
-    void ProgramStatus::end()
-    {
-        doEnd_.store(true);
-    }
-
-    bool ProgramStatus::isEnded() const
-    {
-        return doEnd_.load();
-    }
-
-    void ProgramStatus::addException(std::exception_ptr errPtr)
-    {
-        std::lock_guard<std::mutex> lk(mutex_);
-        exceptions_.push_back(errPtr);
-    }
-
-    bool ProgramStatus::hasExceptions() const
-    {
-        std::lock_guard<std::mutex> lk(mutex_);
-        return !exceptions_.empty();
-    }
-
-    void ProgramStatus::logExceptions()
-    {
-        std::function<void(const std::exception&)> logNestedException =
-            [&logNestedException](const std::exception& e)
-            {
-                LOG4CXX_ERROR(logger, e.what() << ":");
-                try
-                {
-                    std::rethrow_if_nested(e);
-                }
-                catch (const std::exception& nested)
-                {
-                    logNestedException(nested);
-                }
-            };
-
-        std::lock_guard<std::mutex> lk(mutex_);
-        for (auto const& e : exceptions_)
-        {
-            try
-            {
-                std::rethrow_exception(e);
-            }
-            catch (const std::exception& err)
-            {
-                logNestedException(err);
-            }
-        }
-        exceptions_.clear();
     }
 
     // -------------------------
@@ -597,246 +487,6 @@ namespace
             //Cleanup writer
             LOG4CXX_DEBUG(logger, "Exiting writer thread");
         });
-    }
-
-    /// Converts a cv::point to a string representation
-    /// @param[in] pt the point to represent
-    /// @return a string representation of the point in the form (pt.x, pt.y)
-    template<typename T>
-    std::string to_string(const cv::Point_<T>& pt)
-    {
-        return "(" + std::to_string(pt.x) + "," + std::to_string(pt.y) + ")";
-    }
-
-    /// Calculates the aspect ratio (width / height) of the board from the four corners
-    /// Reference:
-    /// Zhengyou Zhang & Li-wei He, "Whiteboard Scanning and Image Enhancement", Digital Signal Processing, April 2007
-    /// https://www.microsoft.com/en-us/research/publication/whiteboard-scanning-image-enhancement
-    /// http://dx.doi.org/10.1016/j.dsp.2006.05.006
-    /// Implementation examples:
-    /// https://stackoverflow.com/questions/1194352/proportions-of-a-perspective-deformed-rectangle/1222855#1222855
-    /// https://stackoverflow.com/questions/38285229/calculating-aspect-ratio-of-perspective-transform-destination-image
-    /// @param[in] corners the four corners of the board
-    /// @param[in] imSize size of the input images (where the corners belong)
-    /// @return the estimated aspect ratio
-    /// @throw runtime_error if the corners do not have sufficient separation to calculate the aspect ratio
-    float getAspectRatio(std::vector<cv::Point2f>& corners, const cv::Size& imSize)
-    {
-        // We will assume that corners contains the corners in the order top-left, top-right, bottom-right, bottom-left
-        assert(corners.size() == 4);
-        for (int i = 0; i < 4; ++i)
-        {
-            if (cv::norm(corners[i] - corners[(i+1)%4]) < 1)
-            {
-                throw std::runtime_error("The provided corners " + to_string(corners[i]) + " and " + to_string(corners[(i+1)%4]) + "are too close.");
-            }
-        }
-        cv::Point2f center(imSize.width / 2.f, imSize.height / 2.f);
-        cv::Point2f m1 = corners[0] - center;   //tl
-        cv::Point2f m2 = corners[1] - center;   //tr
-        cv::Point2f m3 = corners[3] - center;   //bl
-        cv::Point2f m4 = corners[2] - center;   //br
-
-        //TODO: Check k2 & k3 for numeric stability
-        float k2 = ((m1.y-m4.y) * m3.x - (m1.x - m4.x) * m3.y + m1.x * m4.y - m1.y * m4.x) \
-        / ((m2.y - m4.y) * m3.x - (m2.x - m4.x) * m3.y + m2.x * m4.y - m2.y * m4.x);
-
-        float k3 = ((m1.y-m4.y) * m2.x - (m1.x - m4.x) * m2.y + m1.x * m4.y - m1.y * m4.x) \
-        / ((m3.y - m4.y) * m2.x - (m3.x - m4.x) * m2.y + m3.x * m4.y - m3.y * m4.x);
-
-        if ( (std::abs(k2 - 1.f) < 1E-8) || (std::abs(k3 - 1.f) < 1E-8) )
-        {
-            LOG4CXX_DEBUG(logger, "parallel? k2 = " << k2 << ", k3 = " << k3);
-            return std::sqrt( ( std::pow(m2.y - m1.y, 2) + std::pow(m2.x - m1.x, 2) )
-                             / (std::pow(m3.y - m1.y, 2) + std::pow(m3.x - m1.x, 2)) );
-        }
-        else
-        {
-            float fSqr = std::abs( ((k3 * m3.y - m1.y) * (k2 * m2.y - m1.y) + (k3 * m3.x - m1.x) * (k2 * m2.x - m1.x)) \
-                                  / ((k3 - 1) * (k2 - 1)) );
-            LOG4CXX_DEBUG(logger, "Calculated f^2 = " << fSqr << "[k2 = " << k2 << ", k3=" << k3 <<"]");
-            return std::sqrt( ( std::pow(k2 - 1.f, 2) + (std::pow(k2 * m2.y - m1.y, 2) + std::pow(k2 * m2.x - m1.x, 2)) / fSqr )
-                             / (std::pow(k3 - 1.f, 2) + (std::pow(k3 * m3.y - m1.y, 2) + std::pow(k3 * m3.x - m1.x, 2)) / fSqr ) );
-        }
-    }
-
-    /// @class structure that contains coordinates of a board.
-    struct Board
-    {
-        std::vector<cv::Point2f> corners;   ///< Currently selected coordinates of the corners
-        int draggedPt;                      ///< index of the point currently being dragged. -1 if none
-    };  //<anon>::Board
-
-    /// Mouse callback for the window, replacing cv::MouseCallback
-    void onMouse(int event, int x, int y, int flags, void *userdata)
-    {
-        Board* pC = static_cast<Board*>(userdata);
-        assert(pC->draggedPt < (int) pC->corners.size());
-        cv::Point2f curPt(x,y);
-        switch(event)
-        {
-            case cv::MouseEventTypes::EVENT_LBUTTONDOWN:
-                //See if we are near any existing markers
-                assert(pC->draggedPt < 0);
-                for (int i = 0; i < pC->corners.size(); ++i)
-                {
-                    if (cv::norm(curPt - pC->corners[i]) < 10.f)
-                    {
-                        pC->draggedPt = i;  //start dragging
-                        break;
-                    }
-                }
-                break;
-            case cv::MouseEventTypes::EVENT_MOUSEMOVE:
-                if ((flags & cv::MouseEventFlags::EVENT_FLAG_LBUTTON) && (pC->draggedPt >= 0))
-                {
-                    pC->corners[pC->draggedPt] = curPt;
-                }
-                break;
-            case cv::MouseEventTypes::EVENT_LBUTTONUP:
-                if (pC->draggedPt >= 0)
-                {
-                    pC->corners[pC->draggedPt] = curPt;
-                    pC->draggedPt = -1; //end dragging
-                }
-                else if (pC->corners.size() < 4)
-                {
-                    pC->corners.emplace_back(x,y);
-                }
-                break;
-            default:
-                break;
-        }
-    }
-
-    cv::Mat_<double> getPerspectiveTransformationMatrix(std::weak_ptr<const avtools::ThreadsafeFrame> pFrame)
-    {
-        static const cv::Scalar FIXED_COLOR = cv::Scalar(0,0,255), DRAGGED_COLOR = cv::Scalar(255, 0, 0);
-        static const std::string INPUT_WINDOW_NAME = "Input", OUTPUT_WINDOW_NAME = "Warped";
-        cv::startWindowThread();
-        Board board;
-        cv::Mat_<double> trfMatrix;
-        cv::Mat inputImg, warpedImg;
-        std::vector<cv::Point2f> TGT_CORNERS;
-        avtools::Frame intermediateFrame;
-        cv::Mat warpedImage;
-        board.draggedPt = -1;
-        cv::namedWindow(INPUT_WINDOW_NAME);
-        cv::namedWindow(OUTPUT_WINDOW_NAME);
-        cv::setMouseCallback(INPUT_WINDOW_NAME, onMouse, &board);
-
-        //Initialize
-        {
-            auto ppFrame = pFrame.lock();
-            if (!ppFrame)
-            {
-                throw std::runtime_error("Invalid frame provided to calculate perspective transform");
-            }
-            auto lock = ppFrame->getReadLock();
-            intermediateFrame = ppFrame->clone();
-            warpedImg = cv::Mat((*ppFrame)->height, (*ppFrame)->width, CV_8UC3);
-        }
-        //Start the loop
-        while ( !g_Status.isEnded() && (cv::waitKey(20) < 0) )    //wait for key press
-        {
-            auto ppFrame = pFrame.lock();
-            if (!ppFrame)
-            {
-                break;
-            }
-            cv::Rect2f roi(cv::Point2f(), warpedImg.size());
-            // See if a new input image is available, and copy to intermediate frame if so
-            {
-                auto lock = ppFrame->tryReadLock(); //non-blocking attempt to lock
-                assert((*ppFrame)->format == PIX_FMT);
-                if ( lock && ((*ppFrame)->best_effort_timestamp != AV_NOPTS_VALUE) )
-                {
-                    LOG4CXX_DEBUG(logger, "Transformer received frame with pts: " << (*ppFrame)->best_effort_timestamp);
-                }
-                ppFrame->clone(intermediateFrame);
-            }
-            // Display intermediateFrame and warpedFrame if four corners have been chosen
-            inputImg = getImage(intermediateFrame);
-            if (inputImg.total() > 0)
-            {
-                const float IMG_ASPECT = (float) inputImg.cols / (float) inputImg.rows;
-                int nCorners = (int) board.corners.size();
-                if (nCorners == 4)
-                {
-                    //Calculate aspect ratio:
-                    float aspect = getAspectRatio(board.corners, inputImg.size());
-                    LOG4CXX_DEBUG(logger, "Calculated aspect ratio is: " << aspect);
-                    if (aspect > IMG_ASPECT)
-                    {
-                        roi.height = (float) warpedImg.cols / aspect;
-                        assert(roi.width == (float) warpedImg.cols);
-                        assert(roi.x == 0.f);
-                        roi.y = (warpedImg.rows - roi.height) / 2.f;
-                        assert(roi.y >= 0.f);
-                    }
-                    else
-                    {
-                        roi.width = (float) warpedImg.rows * aspect;
-                        assert(roi.height == (float) warpedImg.rows);
-                        roi.x = (warpedImg.cols - roi.width) / 2.f;
-                        assert(roi.x >= 0.f);
-                        assert(roi.y == 0.f);
-                    }
-                    TGT_CORNERS = {roi.tl(), cv::Point2f(roi.x + roi.width, roi.y), roi.br(), cv::Point2f(roi.x, roi.y + roi.height)};
-
-                    trfMatrix = cv::getPerspectiveTransform(board.corners, TGT_CORNERS);
-
-#ifndef NDEBUG
-                    LOG4CXX_DEBUG(logger, "Need to transform \n" << board.corners << " to \n" << TGT_CORNERS);
-                    auto warpPt = [](const cv::Point2f& pt, cv::Mat_<float> trfMat)
-                    {
-                        float scaleFactor = trfMat[2][0] * pt.x + trfMat[2][1] * pt.y + trfMat[2][2];
-                        return cv::Point2f(
-                                           (trfMat[0][0] * pt.x + trfMat[0][1] * pt.y + trfMat[0][2]) / scaleFactor,
-                                           (trfMat[1][0] * pt.x + trfMat[1][1] * pt.y + trfMat[1][2]) / scaleFactor
-                                           );
-                    };
-                    LOG4CXX_DEBUG(logger, "Calculated matrix \n" << trfMatrix << " will transform "
-                                  << board.corners[0] << " -> " << warpPt(board.corners[0], trfMatrix) << ", "
-                                  << board.corners[1] << " -> " << warpPt(board.corners[1], trfMatrix) << ","
-                                  << board.corners[2] << " -> " << warpPt(board.corners[2], trfMatrix) << ","
-                                  << board.corners[3] << " -> " << warpPt(board.corners[3], trfMatrix) << "."
-                                  );
-#endif
-                    warpedImg = 0;
-                    cv::warpPerspective(inputImg, warpedImg, trfMatrix, warpedImg.size(), cv::InterpolationFlags::INTER_LINEAR);
-                    cv::imshow(OUTPUT_WINDOW_NAME, warpedImg(roi));
-                    for (int i = 0; i < 4; ++i)
-                    {
-                        cv::line(inputImg, board.corners[i], board.corners[(i+1) % 4], FIXED_COLOR);
-                    }
-                }
-                for (int i = 0; i < nCorners; ++i)
-                {
-                    auto color = (board.draggedPt == i ? DRAGGED_COLOR : FIXED_COLOR);
-                    cv::drawMarker(inputImg, board.corners[i], color, cv::MarkerTypes::MARKER_SQUARE, 5);
-                    cv::putText(inputImg, std::to_string(i+1), board.corners[i], cv::FONT_HERSHEY_SIMPLEX, 0.5, color);
-                }
-                cv::imshow(INPUT_WINDOW_NAME, inputImg);
-            }
-        }
-        if (g_Status.isEnded())
-        {
-            return cv::Mat();
-        }
-        if (board.corners.size() == 4)
-        {
-            assert(trfMatrix.total() > 0);
-            LOG4CXX_DEBUG(logger, "Current perspective transform is :" << trfMatrix);
-        }
-        else
-        {
-            throw std::runtime_error("Perspective transform requires 4 points.");
-        }
-        cv::setMouseCallback(INPUT_WINDOW_NAME, nullptr, nullptr);
-        cv::destroyAllWindows();
-        cv::waitKey(10);
-        return trfMatrix;
     }
 
     std::thread threadedWarp(std::weak_ptr<const avtools::ThreadsafeFrame> pInFrame, std::weak_ptr<avtools::ThreadsafeFrame> pWarpedFrame, const cv::Mat& trfMatrix)

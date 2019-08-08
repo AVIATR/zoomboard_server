@@ -18,7 +18,6 @@
 #include <log4cxx/fileappender.h>
 #endif
 #include <log4cxx/patternlayout.h>
-#include <boost/filesystem.hpp>
 #include <boost/program_options.hpp>
 #include "opencv2/core.hpp"
 #include "opencv2/highgui.hpp"
@@ -27,7 +26,6 @@
 
 namespace
 {
-    namespace bfs = ::boost::filesystem;
     namespace bpo = ::boost::program_options;
 
     // Initialize logger
@@ -36,7 +34,7 @@ namespace
     /// Saves calibration outputs
     /// @param[in] calibrationFile file to save to
     /// @param[in] dict dictionary of aruco markers that were used in calibration
-    void saveMarkerConfiguration(bfs::path calibrationFile, const cv::Ptr<cv::aruco::Dictionary> dict);
+    void saveMarkerConfiguration(const std::string& calibrationFile, const cv::Ptr<cv::aruco::Dictionary> dict);
 
 } //::<anon>
 
@@ -65,7 +63,7 @@ int main(int argc, const char * argv[])
     logger->setLevel(debugLevel);
 
     //Parse command line options
-    static const std::string PROGRAM_NAME = bfs::path(argv[0]).filename().string() + " v" + std::to_string(ZOOMBOARD_SERVER_VERSION_MAJOR) + "." + std::to_string(ZOOMBOARD_SERVER_VERSION_MINOR);
+    static const std::string PROGRAM_NAME = fs::path(argv[0]).filename().string() + " v" + std::to_string(ZOOMBOARD_SERVER_VERSION_MAJOR) + "." + std::to_string(ZOOMBOARD_SERVER_VERSION_MINOR);
 
     bpo::options_description programDesc(PROGRAM_NAME + " options");
     bpo::positional_options_description posDesc;
@@ -102,7 +100,7 @@ int main(int argc, const char * argv[])
 
     const std::string markerFile = vm["marker_file"].as<std::string>();
     //Until we convert to C++17, we need to use boost::filesystem to check for file. Afterwards, we can use std::filesystem
-    if ( bfs::exists( markerFile ) )
+    if ( fs::exists( markerFile ) )
     {
         bool doOverwrite = promptYesNo("Marker file " + markerFile + " exists and will be overwritten. Proceed?");
         if (not doOverwrite)
@@ -113,8 +111,8 @@ int main(int argc, const char * argv[])
     }
 
     //Create 2x2 aruco board image if it does not exist
-    const bfs::path arucoFile = "arucobrd_2x2.png";
-    if ( bfs::exists(arucoFile))
+    const fs::path arucoFile = "arucobrd_2x2.png";
+    if ( fs::exists(arucoFile))
     {
         LOG4CXX_DEBUG(logger, "2x2 Aruco board image file " << arucoFile << " found and will be overwritten.");
     }
@@ -135,9 +133,9 @@ int main(int argc, const char * argv[])
 
 namespace
 {
-    void saveMarkerConfiguration(bfs::path calibrationFile, const cv::Ptr<cv::aruco::Dictionary> dict)
+    void saveMarkerConfiguration(const std::string& calibrationFile, const cv::Ptr<cv::aruco::Dictionary> dict)
     {
-        cv::FileStorage fs(calibrationFile.string(), cv::FileStorage::WRITE);
+        cv::FileStorage fs(calibrationFile, cv::FileStorage::WRITE);
         fs << "markers" << dict->bytesList;
         fs << "marker_size" << dict->markerSize;
 #ifndef NDEBUG

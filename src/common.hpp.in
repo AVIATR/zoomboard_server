@@ -14,6 +14,14 @@
 
 #include <string>
 
+#if __cplusplus > 201703L
+#include <filesystem.hpp> //If C++17, use std::filesystem
+namespace fs = std::filesystem
+#else
+#include <boost/filesystem.hpp> //Otherwise, use boost::filesystem to check for files, etc.
+namespace fs = ::boost::filesystem;
+#endif  /* if __cplusplus */
+
 static const int MARKER_SIZE = 4;
 static const int MARKER_X = 2;
 static const int MARKER_Y = 2;

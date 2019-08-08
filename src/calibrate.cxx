@@ -9,16 +9,16 @@
 
 #include <cassert>
 #include <string>
-//#include <algorithm>
 #include <vector>
-//#include <functional>
 #include <iostream>
+#include <stdexcept>
 #include <log4cxx/logger.h>
 #include <log4cxx/basicconfigurator.h>
 #include <log4cxx/consoleappender.h>
+#ifndef NDEBUG
 #include <log4cxx/fileappender.h>
+#endif
 #include <log4cxx/patternlayout.h>
-#include <boost/filesystem.hpp> //Until we convert to C++17, we need to use boost::filesystem to check for file. Afterwards, we can use std::filesystem
 #include <boost/program_options.hpp>
 #include "opencv2/core.hpp"
 #include "opencv2/imgproc.hpp"
@@ -28,7 +28,6 @@
 
 namespace
 {
-    namespace bfs = ::boost::filesystem;
     namespace bpo = ::boost::program_options;
 
     /// Reads the board used for calibration from the marker file
@@ -52,7 +51,7 @@ namespace
     /// @param[in] dict dictionary of aruco markers that were used in calibration
     /// @param[in] cameraMatrix camera matrix
     /// @param[in] distCoeffs vector of distortion coefficients
-    void saveCalibrationOutputs(bfs::path calibrationFile, const cv::Ptr<cv::aruco::Dictionary> dict, const cv::Mat& cameraMatrix, const cv::Mat& distCoeffs);
+    void saveCalibrationOutputs(const std::string& calibrationFile, const cv::Ptr<cv::aruco::Dictionary> dict, const cv::Mat& cameraMatrix, const cv::Mat& distCoeffs);
 
 } //::<anon>
 
@@ -68,12 +67,11 @@ int main(int argc, const char * argv[])
     log4cxx::LayoutPtr layoutPtr(new log4cxx::PatternLayout("%d %-5p %c{1} - %m%n"));
     log4cxx::AppenderPtr consoleAppPtr(new log4cxx::ConsoleAppender(layoutPtr));
     log4cxx::BasicConfigurator::configure(consoleAppPtr);
+#ifndef NDEBUG
     //Also add file appender - see https://stackoverflow.com/questions/13967382/how-to-set-log4cxx-properties-without-property-file
     log4cxx::AppenderPtr fileAppenderPtr(new log4cxx::FileAppender(layoutPtr, "calibration_log.txt", false));
     log4cxx::BasicConfigurator::configure(fileAppenderPtr);
-
     // Set log level.
-#ifndef NDEBUG
     const auto debugLevel = log4cxx::Level::getDebug();
 #else
     const auto debugLevel = log4cxx::Level::getWarn();
@@ -82,7 +80,7 @@ int main(int argc, const char * argv[])
     logger->setLevel(debugLevel);
 
     //Parse command line options
-    static const std::string PROGRAM_NAME = bfs::path(argv[0]).filename().string() + " v" + std::to_string(ZOOMBOARD_SERVER_VERSION_MAJOR) + "." + std::to_string(ZOOMBOARD_SERVER_VERSION_MINOR);
+    static const std::string PROGRAM_NAME = fs::path(argv[0]).filename().string() + " v" + std::to_string(ZOOMBOARD_SERVER_VERSION_MAJOR) + "." + std::to_string(ZOOMBOARD_SERVER_VERSION_MINOR);
 
     bpo::options_description programDesc(PROGRAM_NAME + " options");
     bpo::positional_options_description posDesc;
@@ -120,14 +118,14 @@ int main(int argc, const char * argv[])
 
     // Load the aruco dictionary to use for calibration
     const std::string markerFile = vm["marker_file"].as<std::string>();
-    if (!bfs::exists(markerFile))
+    if (!fs::exists(markerFile))
     {
         throw std::runtime_error("A marker file could not be found, please check path or use create_markers to create one.");
     }
     auto gridBrd = getArucoBoard(markerFile);
 
     const std::string calibrationFile = vm["calibration_file"].as<std::string>();
-    if ( bfs::exists( calibrationFile ) )
+    if ( fs::exists( calibrationFile ) )
     {
         bool doOverwrite = promptYesNo("Calibration file " + calibrationFile + " exists and will be overwritten. Proceed?");
         if (not doOverwrite)
@@ -162,11 +160,18 @@ namespace
 {
     const cv::Ptr<cv::aruco::GridBoard> getArucoBoard(const std::string& markerFile)
     {
-        cv::FileStorage fs(markerFile, cv::FileStorage::READ);
         cv::Mat markers;
         int markerSz;
-        fs["markers"] >> markers;
-        fs["marker_size"] >> markerSz;
+        try
+        {
+            cv::FileStorage fs(markerFile, cv::FileStorage::READ);
+            fs["markers"] >> markers;
+            fs["marker_size"] >> markerSz;
+        }
+        catch (std::exception& err)
+        {
+            std::throw_with_nested( std::runtime_error("Unable to read board information from " + markerFile) );
+        }
         auto pDict = cv::makePtr<cv::aruco::Dictionary>(markers, markerSz);
         return cv::aruco::GridBoard::create(MARKER_X, MARKER_Y, MARKER_LEN, MARKER_SEP, pDict);
     }
@@ -221,13 +226,11 @@ namespace
         return projError;
     }
 
-    void saveCalibrationOutputs(bfs::path calibrationFile, const cv::Ptr<cv::aruco::Dictionary> dict, const cv::Mat& cameraMatrix, const cv::Mat& distCoeffs)
+    void saveCalibrationOutputs(const std::string& calibrationFile, const cv::Ptr<cv::aruco::Dictionary> dict, const cv::Mat& cameraMatrix, const cv::Mat& distCoeffs)
     {
-        cv::FileStorage fs(calibrationFile.string(), cv::FileStorage::WRITE);
-        fs << "aruco" << "{";
+        cv::FileStorage fs(calibrationFile, cv::FileStorage::WRITE);
         fs << "markers" << dict->bytesList;
         fs << "marker_size" << dict->markerSize;
-        fs << "}";
         fs << "camera_matrix" << cameraMatrix;
         fs << "distortion_coefficients" << distCoeffs;
 #ifndef NDEBUG

@@ -93,7 +93,7 @@ namespace avtools
                 throw MediaError("Could not open " + url, ret);
             }
 #ifndef NDEBUG
-            LOG4CXX_DEBUG(logger, "Unused demuxer options:\n" << muxerOpts.as_string());
+            LOG4CXX_DEBUG(logger, "Unused demuxer options:\n" << muxerOpts);
             {
                 avtools::CharBuf buf;
                 ret = av_opt_serialize(formatCtx_.get(), AV_OPT_FLAG_DECODING_PARAM, 0, &buf.get(), ':', '\n');
@@ -156,7 +156,7 @@ namespace avtools
                 }
                 codecCtx_->time_base = pStream->time_base;
 #ifndef NDEBUG
-                LOG4CXX_DEBUG(logger, "Unused decoder options: " << codecOpts.as_string());
+                LOG4CXX_DEBUG(logger, "Unused decoder options: " << codecOpts);
                 {
                     avtools::CharBuf buf;
                     ret = av_opt_serialize(codecCtx_.get(), AV_OPT_FLAG_DECODING_PARAM, 0, &buf.get(), ':', '\n');
@@ -166,7 +166,7 @@ namespace avtools
                     }
                     LOG4CXX_DEBUG(logger, "Available decoder options:\n" << buf.get());
                 }
-                LOG4CXX_DEBUG(logger, "Unused decoder private options: " << codecOpts.as_string());
+                LOG4CXX_DEBUG(logger, "Unused decoder private options: " << codecOpts);
                 {
                     avtools::CharBuf buf;
                     ret = av_opt_serialize(codecCtx_->priv_data, AV_OPT_FLAG_DECODING_PARAM, 0, &buf.get(), ':', '\n');

@@ -8,13 +8,13 @@ function usage {
     echo " build_dir        Name of folder to put the build files in. Default is 'build'."
 }
 
-if [ -z "$1" ]; then
-    usage
-    exit 1
-fi
+#if [ -z "$1" ]; then
+#    usage
+#    exit 1
+#fi
 TARGET_DIR='build'
 
-ARGS=(-DBUILD_SHARED_LIBS=YES)
+#ARGS=(-DBUILD_SHARED_LIBS=YES)
 while [[ $# -gt 0 ]]
 do
 key="$1"
@@ -67,3 +67,6 @@ if [ "${DO_BUILD_BINARIES}" = yes ]; then
     echo "Building binaries"
     make -C ${TARGET_DIR}
 fi
+
+mkdir -p ${TARGET_DIR}/bin/
+ln -s "$(dirname $(pwd))/Data" ${TARGET_DIR}/bin/Data

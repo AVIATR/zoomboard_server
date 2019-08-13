@@ -97,7 +97,8 @@ message(STATUS "BINARY DIR = ${PROJECT_BINARY_DIR}")
 #Add source folder
 add_subdirectory("src")
 message(STATUS "Target folder = ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}")
-configure_file(config.json "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/config.json" COPYONLY)
+configure_file(input.json "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/input.json" COPYONLY)
+configure_file(output.json "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/output.json" COPYONLY)
 
 # CPack packaging
 include(InstallRequiredSystemLibraries)

@@ -331,12 +331,12 @@ namespace avtools
         return (pDict_ ? av_dict_get(pDict_, key.c_str(), nullptr, 0) != nullptr : false);
     }
 
-    std::string Dictionary::as_string(const char keySep/*='\t'*/, const char entrySep/*='\n'*/) const
+    Dictionary::operator std::string() const
     {
         CharBuf buf;
         if (pDict_)
         {
-            int ret = av_dict_get_string(pDict_, &buf.get(), keySep, entrySep);
+            int ret = av_dict_get_string(pDict_, &buf.get(), '=', ':');
             if (ret < 0)
             {
                 throw MediaError("Dictionary: Could not get unused options", ret);
@@ -344,7 +344,34 @@ namespace avtools
         }
         return (buf ? std::string(buf.get()) : std::string());
     }
-    
+
+    Dictionary& Dictionary::operator=(const Dictionary& dict)
+    {
+        if (pDict_)
+        {
+            av_dict_free(&pDict_);  //clear previous entries
+        }
+        if (dict)
+        {
+            int ret = av_dict_copy(&pDict_, dict.get(), 0); //copy entries from dict
+            if (ret < 0)
+            {
+                throw MediaError("Unable to clone dictionary.");
+            }
+            assert(pDict_);
+        }
+        return *this;
+    }
+
+    int Dictionary::size() const
+    {
+        return (pDict_ ? av_dict_count(pDict_) : 0);
+    }
+
+    bool Dictionary::empty() const
+    {
+        return (0 == size());
+    }
     // -------------------------------------------------
     // AVCodecContext wrapper
     // -------------------------------------------------

@@ -42,7 +42,7 @@ namespace
             throw std::runtime_error("Unable to find " + filterType + " filter");
         }
 
-        const std::string filterArgs = args.as_string('=', ':');
+        const std::string filterArgs = (std::string) args;
         LOG4CXX_DEBUG(logger, "Adding " << filterType << " filter to graph with arguments " << filterArgs);
         int ret = avfilter_graph_create_filter(&pCtx, pF, name.c_str(), filterArgs.c_str(), NULL, pGraph);
         if (ret < 0)
@@ -269,7 +269,7 @@ namespace avtools
             AVOutputFormat* pOutFormat = formatCtx_->oformat;
             assert(pOutFormat);
 
-            LOG4CXX_DEBUG(logger, "Attempting to set muxer options:\n" << muxerOpts.as_string());
+            LOG4CXX_DEBUG(logger, "Attempting to set muxer options:\n" << muxerOpts);
             ret = av_opt_set_dict(formatCtx_.get(), &muxerOpts.get());
             if (0 != ret)
             {
@@ -281,7 +281,7 @@ namespace avtools
                 throw MediaError("Unable to set private muxer options", ret);
             }
 #ifndef NDEBUG
-            LOG4CXX_DEBUG(logger, "Unused muxer private options:\n" << muxerOpts.as_string());
+            LOG4CXX_DEBUG(logger, "Unused muxer private options:\n" << muxerOpts);
             {
                 avtools::CharBuf buf;
                 ret = av_opt_serialize(formatCtx_.get(), AV_OPT_FLAG_ENCODING_PARAM, 0, &buf.get(), ':', '\n');
@@ -389,7 +389,7 @@ namespace avtools
             assert( codecCtx_.isOpen() );
             LOG4CXX_DEBUG(logger, "MediaWriter: Opened encoder for " << codecCtx_.info());
 #ifndef NDEBUG
-            LOG4CXX_DEBUG(logger, "Unused codec options:\n" << codecOpts.as_string());
+            LOG4CXX_DEBUG(logger, "Unused codec options:\n" << codecOpts);
             {
                 avtools::CharBuf buf;
                 ret = av_opt_serialize(codecCtx_.get(), AV_OPT_FLAG_ENCODING_PARAM, 0, &buf.get(), ':', '\n');

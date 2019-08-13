@@ -11,6 +11,8 @@
 #define LibAVWrappers_hpp
 
 #include <string>
+#include <iostream>
+
 #include "Media.hpp"
 extern "C" {
 #include <libavformat/avformat.h>
@@ -234,12 +236,23 @@ namespace avtools
         /// @return true if the dictionary has this key, false otherwise.
         bool has(const std::string& key) const;
 
-        /// Returns a string representation of the dictionary entries
-        std::string as_string(const char keySep='\t', const char entrySep='\n') const;
+        /// String cast operator
+        operator std::string() const;
 
-        inline Dictionary& operator=(const Dictionary& dict) = delete;
+        /// @return size of the dictionary
+        int size() const;
+
+        /// @return true if dictionary is empty
+        bool empty() const;
+
+        Dictionary& operator=(const Dictionary& dict);
     };  //avtools::Dictionary
-    
+
+    inline std::ostream& operator<<(std::ostream& stream, const Dictionary& dict)
+    {
+        return ( stream << (std::string) dict );
+    }
+
     /// @class Wrapper around AVCodecContext
     class CodecContext
     {

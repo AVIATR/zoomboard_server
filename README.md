@@ -24,7 +24,9 @@ where `marker_file.json` is the output of the `create_markers` process, and `cal
 ## Local testing of the server
 The zoomboard server is started via
 
-    ./zoomboard_server config.json
+    ./zoomboard_server -i <input> -o <output>
+    
+where the `<input>` and `<output>` can be media files or preferably .json files that have information re: input/output parameters to use if non-default values are to be used. To see how these files are set up, look at the example `input.json` and `output.json` files.
 
 The nginx server can be started using the script in the nginx folder. The usage is
 

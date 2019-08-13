@@ -22,8 +22,6 @@
 #include <log4cxx/fileappender.h>
 #endif
 #include <log4cxx/patternlayout.h>
-#include <boost/property_tree/ptree.hpp>
-#include <boost/property_tree/json_parser.hpp>
 #include <boost/program_options.hpp>
 #include "opencv2/core.hpp"
 #include "opencv2/imgproc.hpp"
@@ -50,7 +48,6 @@ namespace
     /// See https://www.ffmpeg.org/ffmpeg-devices.html for the list of codec & stream options
     struct Options
     {
-        std::string url;                    ///< Url to open output stream
         avtools::Dictionary codecOpts;      ///< codec options
         avtools::Dictionary muxerOpts;      ///< muxer options
     };
@@ -61,10 +58,14 @@ namespace
     /// @return a reference to the output stream
     inline std::ostream& operator<<(std::ostream& stream, const Options& opts)
     {
-        return ( stream << "url:" << opts.url << "\n"
-                << "codec options:\n" << opts.codecOpts.as_string()
-                << "muxer options:\n" << opts.muxerOpts.as_string() );
+        return ( stream << "codec options:\n" << opts.codecOpts << "muxer options:\n" << opts.muxerOpts );
     }
+
+    /// Compares two strings
+    /// @param[in] a first string
+    /// @param[in] b second string
+    /// @return true if the two strings are equivalent. Case is ignored.
+    bool strequals(const std::string& a, const std::string& b);
 
     /// Parses a json file to retrieve the output configuration to use
     /// @param[in] configFile name of configuration file to read
@@ -141,15 +142,16 @@ int main(int argc, const char * argv[])
 
     bpo::options_description programDesc(PROGRAM_NAME + " options");
     bpo::positional_options_description posDesc;
-    posDesc.add("config_file", -1);
+    posDesc.add("input", 1);
+    posDesc.add("output", 1);
     programDesc.add_options()
     ("help,h", "produce help message")
     ("version,v", "program version")
-    ("yes,y", "answer 'yes' to every prompt'")
+    ("yes,y", "answer 'yes' to every prompt")
     ("adjust,a", "adjust perspective")
     ("calibration_file,c", bpo::value<std::string>(), "calibration file to use if using aruco markers, created by calibrate_camera. If none is provided, and the adjust option is also passed, then a window is provided for the user to click on the corners of the board.")
-    ("output_folder,o", bpo::value<std::string>()->default_value("."), "output folder to write the streams")
-    ("config_file", bpo::value<std::string>()->default_value("config.json"), "path of configuration file to use for video options")
+    ("output,o", bpo::value<std::string>()->default_value("output.json"), "output file or configuration file")
+    ("input,i", bpo::value<std::string>()->default_value("input.json"), "input file or configuration file.")
     ;
 
     bpo::variables_map vm;
@@ -163,6 +165,14 @@ int main(int argc, const char * argv[])
         LOG4CXX_FATAL(logger, "Error parsing command line arguments:" << err.what() << programDesc);
         return EXIT_FAILURE;
     }
+#ifndef NDEBUG
+    LOG4CXX_DEBUG(logger, "Program arguments:");
+    for (auto it: vm)
+    {
+        LOG4CXX_DEBUG(logger, it.first << ": " << it.second.as<std::string>());
+    }
+#endif
+
     if (vm.count("help"))
     {
         std::cout << programDesc << std::endl;
@@ -174,58 +184,76 @@ int main(int argc, const char * argv[])
         return EXIT_SUCCESS;
     }
 
-    assert(vm.count("config_file"));
-    assert(vm.count("output_folder"));
-
-    const std::string configFile = vm["config_file"].as<std::string>();
-    //Until we convert to C++17, we need to use boost::filesystem to check for file. Afterwards, we can use std::filesystem
-    if ( !fs::exists( configFile ) )
-    {
-        throw std::runtime_error("Could not find configuration file " + configFile);
-    }
-    LOG4CXX_INFO(logger, "Using configuration file: " << configFile);
-
-    std::map<std::string, Options> opts = getOptions(configFile);
-    auto pInputOpts = opts.find("input");
-    if (pInputOpts == opts.end())
-    {
-        throw std::runtime_error("Could not find input options in the configuration file.");
-    }
-    Options& inOpts = pInputOpts->second;
-    LOG4CXX_DEBUG(logger, "Input options are:\n" << inOpts << "\nOpening reader.");
-    avtools::MediaReader rdr(inOpts.url, inOpts.muxerOpts);
-    const AVStream* pVidStr = rdr.getVideoStream();
-    LOG4CXX_DEBUG(logger, "Input stream info:\n" << avtools::getStreamInfo(pVidStr) );
-
-    //Done with input options, treat all remaining options as output options
-    opts.erase(pInputOpts);
-
-    // Create output folders if they do not exixt
-    const fs::path outputFolder(vm["output_folder"].as<std::string>());
-    for (auto& opt: opts)
-    {
-        opt.second.url = (outputFolder / fs::path(opt.second.url)).string();
-        setUpOutputLocations(opt.second.url, vm.count("yes"));
-    }
+    assert(vm.count("input"));
+    assert(vm.count("output"));
 
     // -----------
     // Open the reader and start the thread to read frames
     // -----------
+    const fs::path input = vm["input"].as<std::string>();
+    if ( !fs::exists( input ) )
+    {
+        throw std::runtime_error("Could not find input " + input.string());
+    }
+    std::map<std::string, Options> inputOpts;
+    if ( strequals(input.extension().string(), "json") )
+    {
+        LOG4CXX_INFO(logger, "Using input configuration file: " << input);
+        inputOpts = getOptions(input.string());
+        if (inputOpts.size() != 1)
+        {
+            throw std::runtime_error("Only one input is allowed, found " + std::to_string(inputOpts.size()));
+        }
+        LOG4CXX_DEBUG(logger, "Input options:\nURL = " << inputOpts.begin()->first << "\nOptions = " << inputOpts.begin()->second);
+    }
+    else
+    {
+        LOG4CXX_INFO(logger, "Using input file: " << input);
+        inputOpts[input.string()] = Options();
+    }
+    LOG4CXX_DEBUG(logger, "Opening reader.");
+    assert(inputOpts.size() == 1);
+    avtools::MediaReader rdr(inputOpts.begin()->first, inputOpts.begin()->second.muxerOpts);
+    const AVStream* pVidStr = rdr.getVideoStream();
+    LOG4CXX_DEBUG(logger, "Input stream info:\n" << avtools::getStreamInfo(pVidStr) );
+
+    // Create output folders if they do not exixt
+//    const fs::path outputFolder(vm["output_folder"].as<std::string>());
+//    for (auto& opt: opts)
+//    {
+//        opt.second.url = (outputFolder / fs::path(opt.second.url)).string();
+//        setUpOutputLocations(opt.second.url, vm.count("yes"));
+//    }
+
     std::vector<std::thread> threads;
     auto pInFrame = avtools::ThreadsafeFrame::Get(pVidStr->codecpar->width, pVidStr->codecpar->height, PIX_FMT, pVidStr->time_base);
     threads.emplace_back(threadedRead(pInFrame, rdr));
 
     // -----------
-    // Start writing
+    // Open the outputs and start writer threads
     // -----------
     // Open the writer(s)
     std::vector<avtools::MediaWriter> writers;
-    for (auto& opt: opts)
+    const fs::path output = vm["output"].as<std::string>();
+    if ( strequals(input.extension().string(), ".json") )
     {
-        Options& outOpt = opt.second;
-        LOG4CXX_DEBUG(logger, "Output options for url " << outOpt.url << " are:\n" << outOpt << "\nOpening writer.");
-        writers.emplace_back(outOpt.url, outOpt.codecOpts, outOpt.muxerOpts);
-        LOG4CXX_DEBUG(logger, "Output stream info:\n" << avtools::getStreamInfo(writers.back().getStream()));
+        LOG4CXX_INFO(logger, "Using output configuration file: " << output);
+
+        std::map<std::string, Options> outputOpts = getOptions(output.string());
+        for (auto opt: outputOpts)
+        {
+            fs::path dir(opt.first);
+            setUpOutputLocations(dir.parent_path(), vm.count("yes"));
+            LOG4CXX_DEBUG(logger, "Opening writer for URL: " << opt.first <<"\nOptions: " << opt.second);
+            writers.emplace_back(opt.first, opt.second.codecOpts, opt.second.muxerOpts);
+            LOG4CXX_DEBUG(logger, "Output stream info:\n" << avtools::getStreamInfo(writers.back().getStream()));
+        }
+    }
+    else
+    {
+        LOG4CXX_INFO(logger, "Using output file: " << output);
+        avtools::Dictionary nullDict;
+        writers.emplace_back(output.string(), nullDict, nullDict);
     }
 
     // Start writing (and correct perspective if requested)
@@ -266,6 +294,8 @@ int main(int argc, const char * argv[])
     // -----------
     // Cleanup
     // -----------
+    //TODO: There is a potential issue of the program (likely the reader thread) crashes before all threads are joined.
+    // We should switch to a task oriented approach or move the thread pool to programstatus, which joins the threads before ending
     for (auto& thread: threads)
     {
         if (thread.joinable())
@@ -297,46 +327,108 @@ namespace
                           });
     }
 
-    /// Parses a property tree and fills the options structure
-    Options getOptsFromTree(const boost::property_tree::ptree& tree)
+    /// Fills a dictionary from a json map
+    void readMapIntoDict(const cv::FileNode& node, avtools::Dictionary& dict)
     {
-        Options opts;
-        for (auto& branch : tree)
+        assert(node.isMap());
+        for (auto n: node)
         {
-            if ( strequals(branch.first, "url") )
+            if (!n.isNamed())
             {
-                opts.url = branch.second.get_value<std::string>();
+                throw std::runtime_error("Unable to parse node");
             }
-            if ( strequals(branch.first, "codec_options") )
-            {
-                for (auto &leaf : branch.second)
-                {
-                    opts.codecOpts.add(leaf.first, leaf.second.get_value<std::string>());
-                }
-            }
-            if ( strequals(branch.first, "muxer_options") )
-            {
-                for (auto &leaf : branch.second)
-                {
-                    opts.muxerOpts.add(leaf.first, leaf.second.get_value<std::string>());
-                }
-            }
+            dict.add(n.name(), (std::string) n);
+        }
+    }
+
+    std::pair<std::string, Options> getOptsFromMapNode(const cv::FileNode& node)
+    {
+        if (!node.isMap())
+        {
+            throw std::runtime_error("Unable to parse node.");
+        }
+        std::pair<std::string, Options> opts;
+
+        //Find url
+        auto n = node["url"];
+        if (!n.isString())
+        {
+            throw std::runtime_error("Unable to parse url");
+        }
+        else
+        {
+            n >> opts.first;
+        }
+
+        //Find muxer options
+        n = node["muxer_options"];
+        if (n.empty() || n.isNone())
+        {
+            LOG4CXX_INFO(logger, "No muxer options found for " << opts.first);
+        }
+        else if (n.isMap())
+        {
+            //Read all options to dict
+            readMapIntoDict(n, opts.second.muxerOpts);
+        }
+        else
+        {
+            throw std::runtime_error("Unable to parse muxer options for " + opts.first);
+        }
+
+        //Find codec options
+        n = node["codec_options"];
+        if (n.empty() || n.isNone())
+        {
+            LOG4CXX_INFO(logger, "No codec options found for " << opts.first);
+        }
+        else if (n.isMap())
+        {
+            //Read all options to dict
+            readMapIntoDict(n, opts.second.codecOpts);
+        }
+        else
+        {
+            throw std::runtime_error("Unable to parse codec options for " + opts.first);
         }
         return opts;
     }
 
     std::map<std::string, Options> getOptions(const std::string& configFile)
     {
-        namespace bpt = ::boost::property_tree;
-        bpt::ptree tree;
-        bpt::read_json(configFile, tree);
         std::map<std::string, Options> opts;
-        for (auto& subtree: tree)
+        cv::FileStorage cfs(configFile, cv::FileStorage::READ);
+        cv::FileNode root = cfs.root();
+        try
         {
-            opts.emplace(subtree.first, getOptsFromTree(subtree.second));
+            if (root.isSeq())
+            {
+                //assume that there are several configuration options, most likely for output
+                for (auto subNode: root)
+                {
+                    auto val = getOptsFromMapNode(subNode);
+                    if ( opts.find(val.first) != opts.end() )
+                    {
+                        throw std::runtime_error("Multiple options found for url: " + val.first);
+                    }
+                    opts[val.first] = val.second;
+                }
+                return opts;
+            }
+            else
+            {
+                //assume it is a map. getOptsFromNode will throw if not
+                auto val = getOptsFromMapNode(root);
+                opts[val.first] = val.second;
+                return opts;
+            }
         }
-        return opts;
+        catch (std::exception& err)
+        {
+            std::throw_with_nested( std::runtime_error("Unable to parse " + configFile) );
+        }
     }
+
 
     void setUpOutputLocations(const fs::path& url, bool doAssumeYes)
     {

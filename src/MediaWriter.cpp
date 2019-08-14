@@ -361,12 +361,6 @@ namespace avtools
             {
                 throw MediaError("Cannot find an encoder for " + std::string(pCodecDesc->name));
             }
-//            int losses = 0;
-//            codecCtx_->pix_fmt = avcodec_find_best_pix_fmt_of_list(pEncoder->pix_fmts, (AVPixelFormat) codecParam->format, false, &losses);
-//            if (codecCtx_->pix_fmt != codecParam->format)
-//            {
-//                LOG4CXX_INFO(logger, "Setting output pixel format to " << codecCtx_->pix_fmt)
-//            }
 
             // Set the timebase
             //get frame rate
@@ -375,11 +369,21 @@ namespace avtools
             ret = av_parse_video_rate(&framerate, muxerOpts["framerate"].c_str());
             if (ret < 0)
             {
-                throw MediaError("Unable to parse frame rate from muxer options", ret);
+                throw MediaError("Unable to parse frame rate from muxer options: " + muxerOpts["framerate"], ret);
             }
 
             codecCtx_->time_base = av_inv_q(framerate);;                    // Set timebase
             LOG4CXX_DEBUG(logger, "Setting time base to " << codecCtx_->time_base);
+
+            assert(codecOpts.has("pixel_format"));
+            int losses = 0;
+            AVPixelFormat fmt = av_get_pix_fmt(codecOpts["pixel_format"].c_str());
+            codecCtx_->pix_fmt = avcodec_find_best_pix_fmt_of_list(pEncoder->pix_fmts, fmt, false, &losses);
+            if (codecCtx_->pix_fmt != fmt)
+            {
+                LOG4CXX_INFO(logger, "Setting output pixel format to " << codecCtx_->pix_fmt)
+                codecOpts.set("pixel_format", codecCtx_->pix_fmt);
+            }
 
             ret = avcodec_open2(codecCtx_.get(), pEncoder, &codecOpts.get());
             if (ret < 0)

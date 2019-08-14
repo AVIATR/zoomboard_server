@@ -89,8 +89,8 @@ int main(int argc, const char * argv[])
     programDesc.add_options()
     ("help,h", "produce help message")
     ("version,v", "program version")
-    ("marker_file,m", bpo::value<std::string>()->default_value("marker_file.json"), "json file containing the marker dictionary to use for calibration")
-    ("calibration_file", bpo::value<std::string>()->default_value("calibration.json"), "path of configuration file to write calibration results to")
+    ("marker_file,m", bpo::value<std::string>()->default_value(MARKER_FILE_DEFAULT), "json file containing the marker dictionary to use for calibration")
+    ("calibration_file", bpo::value<std::string>()->default_value(CALIBRATION_FILE_DEFAULT), "path of configuration file to write calibration results to")
     ;
 
     try

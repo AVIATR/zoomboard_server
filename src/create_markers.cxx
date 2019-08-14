@@ -72,7 +72,7 @@ int main(int argc, const char * argv[])
     programDesc.add_options()
     ("help,h", "produce help message")
     ("version,v", "program version")
-    ("marker_file", bpo::value<std::string>()->default_value("markers.json"), "path of file to write created marker info to")
+    ("marker_file", bpo::value<std::string>()->default_value(MARKER_FILE_DEFAULT), "path of file to write created marker info to")
     ;
 
     try

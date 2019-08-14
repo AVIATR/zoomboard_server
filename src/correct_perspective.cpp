@@ -347,18 +347,18 @@ cv::Mat_<double> getPerspectiveTransformationMatrix(std::weak_ptr<const avtools:
             cv::imshow(INPUT_WINDOW_NAME, inputImg);
         }
     }
-    if (g_Status.isEnded())
+    if (!g_Status.isEnded())
     {
-        return cv::Mat();
-    }
-    if (corners.size() == 4)
-    {
-        assert(trfMatrix.total() > 0);
-        LOG4CXX_DEBUG(logger, "Current perspective transform is :" << trfMatrix);
-    }
-    else
-    {
-        throw std::runtime_error("Perspective transform requires 4 points.");
+        if (corners.size() == 4)
+        {
+            assert(trfMatrix.total() > 0);
+            LOG4CXX_DEBUG(logger, "Current perspective transform is :" << trfMatrix);
+        }
+        else
+        {
+            LOG4CXX_ERROR(logger, "Perspective transform requires 4 points, given only " << corners.size());
+            trfMatrix = cv::Mat();
+        }
     }
     cv::setMouseCallback(INPUT_WINDOW_NAME, nullptr, nullptr);
     cv::destroyAllWindows();

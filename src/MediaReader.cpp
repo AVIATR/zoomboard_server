@@ -83,10 +83,10 @@ namespace avtools
                 {
                     throw MediaError("Cannot determine input format for " + demuxer);
                 }
+                LOG4CXX_DEBUG(logger, "Opening " << pFormat->long_name );
             }
-            LOG4CXX_DEBUG(logger, "Opening " << pFormat->long_name );
 
-            assert(formatCtx_ && muxerOpts);
+            assert(formatCtx_);
             int ret = avformat_open_input( &formatCtx_.get(), url.c_str(), pFormat, &muxerOpts.get() );
             if( ret < 0 )  // Couldn't open file
             {

@@ -231,6 +231,34 @@ namespace avtools
         /// @throw std::runtime_error if there was an error retrieving the value
         std::string operator[](const std::string& key) const;
 
+        /// Sets the value of an existing key in the dictionary.
+        /// @param[in] key key to search for
+        /// @param[in] value new value of the key, old value is overwritten
+        /// @throw std::out_of_range if key was not found in dictionary
+        /// @throw std::runtime_error if there was a problem setting the value
+        void set(const std::string& key, const std::string& value);
+
+        /// Sets the value of an existing key in the dictionary.
+        /// @param[in] key key to search for
+        /// @param[in] value new value of the key, old value is overwritten
+        /// @throw std::out_of_range if key was not found in dictionary
+        /// @throw std::runtime_error if there was a problem setting the value
+        void set(const std::string& key, TimeType value);
+
+        /// Sets the value of an existing key in the dictionary.
+        /// @param[in] key key to search for
+        /// @param[in] value new value of the key, old value is overwritten
+        /// @throw std::out_of_range if key was not found in dictionary
+        /// @throw std::runtime_error if there was a problem setting the value
+        void set(const std::string& key, TimeBaseType value);
+
+        /// Sets the value of an existing key in the dictionary.
+        /// @param[in] key key to search for
+        /// @param[in] value new value of the key, old value is overwritten
+        /// @throw std::out_of_range if key was not found in dictionary
+        /// @throw std::runtime_error if there was a problem setting the value
+        void set(const std::string& key, AVPixelFormat value);
+
         /// Checks to see if the dictionary has a particular key
         /// @param[in] key to check for
         /// @return true if the dictionary has this key, false otherwise.

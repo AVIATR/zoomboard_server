@@ -11,6 +11,7 @@
 #include <sstream>
 extern "C" {
 #include <libavutil/frame.h>
+#include <libavutil/mem.h>
 #include <libswscale/swscale.h>
 }
 
@@ -37,6 +38,32 @@ namespace
         ss << filler << "isRefCounted:" << std::boolalpha << (pPkt->buf != nullptr) << std::endl;
         ss << filler << "hasKeyFrame:" << std::boolalpha << (pPkt->flags & AV_PKT_FLAG_KEY) << std::endl;
         return ss.str();
+    }
+
+    template<typename T>
+    void replaceDictKey(AVDictionary* pDict, const std::string& key, const T& value)
+    {
+        assert(pDict);
+        AVDictionaryEntry *pEntry = av_dict_get(pDict, key.c_str(), nullptr, 0);
+        if (!pEntry)
+        {
+            throw std::out_of_range("Key " + key + " not found in dictionary.");
+        }
+        av_free(pEntry->value);
+        pEntry->value = av_strdup(std::to_string(value).c_str());
+    }
+
+    template<>
+    void replaceDictKey(AVDictionary* pDict, const std::string& key, const std::string& value)
+    {
+        assert(pDict);
+        AVDictionaryEntry *pEntry = av_dict_get(pDict, key.c_str(), nullptr, 0);
+        if (!pEntry)
+        {
+            throw std::out_of_range("Key " + key + " not found in dictionary.");
+        }
+        av_free(pEntry->value);
+        pEntry->value = av_strdup(value.c_str());
     }
 
 } //<anon>
@@ -329,6 +356,26 @@ namespace avtools
     bool Dictionary::has(const std::string &key) const
     {
         return (pDict_ ? av_dict_get(pDict_, key.c_str(), nullptr, 0) != nullptr : false);
+    }
+
+    void Dictionary::set(const std::string& key, const std::string& value)
+    {
+        replaceDictKey(pDict_, key, value);
+    }
+
+    void Dictionary::set(const std::string& key, TimeType value)
+    {
+        replaceDictKey(pDict_, key, value);
+    }
+
+    void Dictionary::set(const std::string& key, TimeBaseType value)
+    {
+        replaceDictKey(pDict_, key, value);
+    }
+
+    void Dictionary::set(const std::string& key, AVPixelFormat value)
+    {
+        replaceDictKey(pDict_, key, value);
     }
 
     Dictionary::operator std::string() const

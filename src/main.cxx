@@ -78,6 +78,11 @@ namespace
     /// @param[in] doAssumeYes if true, assume yes to all questions and do not prompy
     void setUpOutputLocations(const fs::path& url, bool doAssumeYes);
 
+    /// Copies necessary output options from an input stream, when only an output file is passed
+    /// @param[in] pStr input video stream
+    /// @return an options structure with the muxer & codc options filled in from the values in pStr
+    Options getOptsFromStream(const AVStream* pStr);
+
     /// Function that starts a stream reader that reads from a stream int to a threaded frame
     /// @param[in,out] pFrame threadsafe frame to write to
     /// @param[in] rdr an opened media reader
@@ -196,7 +201,7 @@ int main(int argc, const char * argv[])
         throw std::runtime_error("Could not find input " + input.string());
     }
     std::map<std::string, Options> inputOpts;
-    if ( strequals(input.extension().string(), "json") )
+    if ( strequals(input.extension().string(), ".json") )
     {
         LOG4CXX_INFO(logger, "Using input configuration file: " << input);
         inputOpts = getOptions(input.string());
@@ -211,8 +216,8 @@ int main(int argc, const char * argv[])
         LOG4CXX_INFO(logger, "Using input file: " << input);
         inputOpts[input.string()] = Options();
     }
-    LOG4CXX_DEBUG(logger, "Opening reader.");
     assert(inputOpts.size() == 1);
+    LOG4CXX_DEBUG(logger, "Opening reader for " << inputOpts.begin()->first);
     avtools::MediaReader rdr(inputOpts.begin()->first, inputOpts.begin()->second.muxerOpts);
     const AVStream* pVidStr = rdr.getVideoStream();
     LOG4CXX_DEBUG(logger, "Input stream info:\n" << avtools::getStreamInfo(pVidStr) );
@@ -235,7 +240,7 @@ int main(int argc, const char * argv[])
     // Open the writer(s)
     std::vector<avtools::MediaWriter> writers;
     const fs::path output = vm["output"].as<std::string>();
-    if ( strequals(input.extension().string(), ".json") )
+    if ( strequals(output.extension().string(), ".json") )
     {
         LOG4CXX_INFO(logger, "Using output configuration file: " << output);
 
@@ -252,15 +257,16 @@ int main(int argc, const char * argv[])
     else
     {
         LOG4CXX_INFO(logger, "Using output file: " << output);
-        avtools::Dictionary nullDict;
-        writers.emplace_back(output.string(), nullDict, nullDict);
+        Options outOpts = getOptsFromStream(pVidStr);   //copy required options from the input stream
+        writers.emplace_back(output.string(), outOpts.codecOpts, outOpts.muxerOpts);
     }
 
     // Start writing (and correct perspective if requested)
+    cv::Mat trfMatrix;
+    auto pTrfFrame = avtools::ThreadsafeFrame::Get(pVidStr->codecpar->width, pVidStr->codecpar->height, PIX_FMT, pVidStr->time_base);
     if (vm.count("adjust") > 0) //perspective adjustment requested
     {
         // Get corners of the board
-        cv::Mat trfMatrix;
         if (vm.count("calibration_file"))
         {
             LOG4CXX_DEBUG(logger, "Calibration file found, will use Aruco markers for perspective adjustment.");
@@ -271,23 +277,28 @@ int main(int argc, const char * argv[])
             LOG4CXX_DEBUG(logger, "Please click on the four corners of the board for perspective adjustment.");
             trfMatrix = getPerspectiveTransformationMatrixFromUser(pInFrame);
         }
-        assert(!trfMatrix.empty());
-        // Start the warper thread if need be
-        auto pTrfFrame = avtools::ThreadsafeFrame::Get(pVidStr->codecpar->width, pVidStr->codecpar->height, PIX_FMT, pVidStr->time_base);
+    }
+    if (trfMatrix.empty())
+    {
+        if (vm.count("adjust") > 0)
+        {
+            LOG4CXX_WARN(logger, "Unable to detect perspective, continuing without perspective adjustment.");
+        }
+        // add writers to writer input frames
+        for (auto &writer : writers)
+        {
+            threads.emplace_back( threadedWrite(pInFrame, writer) );
+        }
+    }
+    else  // Start the warper thread
+    {
+        LOG4CXX_DEBUG(logger, "Will apply perspective transform using transformation matrix: " << trfMatrix);
         assert( (AV_NOPTS_VALUE == (*pTrfFrame)->best_effort_timestamp) && (AV_NOPTS_VALUE == (*pTrfFrame)->pts) );
         threads.emplace_back(threadedWarp(pInFrame, pTrfFrame, trfMatrix));
         // add writers to writer perspective transformed frames
         for (auto &writer : writers)
         {
             threads.emplace_back( threadedWrite(pTrfFrame, writer) );
-        }
-    }
-    else
-    {
-        // add writers to writer input frames
-        for (auto &writer : writers)
-        {
-            threads.emplace_back( threadedWrite(pInFrame, writer) );
         }
     }
 
@@ -492,6 +503,15 @@ namespace
 
     }
 
+    Options getOptsFromStream(const AVStream* pStr)
+    {
+        Options opts;
+        opts.muxerOpts.add("framerate", pStr->r_frame_rate);
+        opts.codecOpts.add("video_size", std::to_string(pStr->codecpar->width) + "x" + std::to_string(pStr->codecpar->height));
+        opts.codecOpts.add("pixel_format", std::to_string((AVPixelFormat) pStr->codecpar->format) );
+        return opts;
+    }
+
     // -------------------------
     // Threaded reader & writer functions
     // -------------------------
@@ -507,6 +527,7 @@ namespace
                     const AVStream* pS = rdr.read(frame);
                     if (!pS)
                     {
+                        g_Status.end(); //if the reader ends, end program
                         break;
                     }
                     frame->best_effort_timestamp -= pS->start_time;
@@ -599,6 +620,10 @@ namespace
                     auto ppInFrame = pInFrame.lock();
                     if (!ppInFrame)
                     {
+                        if (g_Status.isEnded())
+                        {
+                            break;
+                        }
                         throw std::runtime_error("Warper received null frame.");
                     }
                     const auto& inFrame = *ppInFrame;

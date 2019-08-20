@@ -223,7 +223,11 @@ namespace
                                      distCoeffs_.empty() ? cv::noArray() : distCoeffs_
                                      );
             int n = (int) ids_.size();
-            assert( (corners_.size() == n) && (n <= 4) );
+            assert( corners_.size() == n );
+            if (n != 4)
+            {
+
+            }
 
             return GetOuterCorners(corners_);
         }
@@ -234,13 +238,24 @@ namespace
             const int nCorners = (int) outerCorners.size();
             assert(corners_.size() == nCorners);
             auto color = (nCorners < 4 ? DRAGGED_COLOR : FIXED_COLOR);
-            for (int i = 0; i < nCorners; ++i)
+            cv::aruco::drawDetectedMarkers(img, corners_,ids_, color);
+            if (nCorners == 4)
             {
-                cv::drawMarker(img, outerCorners[i], color, cv::MarkerTypes::MARKER_SQUARE, 5);
-                cv::putText(img, std::to_string(ids_[i]), outerCorners[i], cv::FONT_HERSHEY_SIMPLEX, 0.5, color);
+                for (int i = 0; i < 4; ++i)
+                {
+                    cv::drawMarker(img, outerCorners[i], DRAGGED_COLOR, cv::MarkerTypes::MARKER_STAR, 10);
+                }
+#ifndef NDEBUG
+                static int nFrame =0;
+                cv::imwrite("marker_img" + std::to_string(nFrame++) + ".jpg", img);
+#endif
             }
+//            for (int i = 0; i < nCorners; ++i)
+//            {
+//                cv::drawMarker(img, outerCorners[i], color, cv::MarkerTypes::MARKER_SQUARE, 5);
+//                cv::putText(img, std::to_string(ids_[i]), outerCorners[i], cv::FONT_HERSHEY_SIMPLEX, 0.5, color);
+//            }
         }
-
     };  // MarkerDirectedBoardFinder
 }
 

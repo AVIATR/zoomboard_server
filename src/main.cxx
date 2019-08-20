@@ -8,6 +8,7 @@
 
 #include <cassert>
 #include <csignal>
+#include <cstdio>
 #include <string>
 #include <algorithm>
 #include <vector>
@@ -20,6 +21,7 @@
 #include <log4cxx/consoleappender.h>
 #ifndef NDEBUG
 #include <log4cxx/fileappender.h>
+#include <log4cxx/filter/levelrangefilter.h>
 #endif
 #include <log4cxx/patternlayout.h>
 #include <boost/program_options.hpp>
@@ -30,6 +32,8 @@ extern "C" {
 #include <libavcodec/avcodec.h>
 #include <libswscale/swscale.h>
 #include <libswresample/swresample.h>
+#include <libavutil/log.h>
+#include <libavutil/bprint.h>
 }
 #include "common.hpp"
 #include "MediaReader.hpp"
@@ -102,9 +106,18 @@ namespace
     /// @return a new thread that runs in the background, updates the warpedFrame when a new inFrame is available.
     std::thread threadedWarp(std::weak_ptr<const avtools::ThreadsafeFrame> pInFrame, std::weak_ptr<avtools::ThreadsafeFrame> pWarpedFrame, const cv::Mat& trfMatrix);
 
+    /// Callback function for libav log messages - used to direct them to the logger
+    /// @see av_log_default_callback
+    /// @param[in] p ptr to a struct of which the first field is a pointer to an AVClass struct.
+    /// @param[in] level message log level
+    /// @param[in] fmr formatting to apply to the message
+    /// @param[in] vaArgs other arguments passed to the logger
+    void logLibAVMessages(void *p, int level, const char * fmt, va_list vaArgs);
+
     // Initialize logger
     log4cxx::LoggerPtr logger(log4cxx::Logger::getLogger("zoombrd"));
-
+    log4cxx::LoggerPtr libavLogger(log4cxx::Logger::getLogger("zoombrd.libav"));
+    std::mutex g_libavLogMutex;
 } //::<anon>
 
 /// Maintains communication between threads re: exceptions & program end
@@ -127,20 +140,11 @@ int main(int argc, const char * argv[])
     log4cxx::LayoutPtr layoutPtr(new log4cxx::PatternLayout("%d %-5p [%-8X{threadname} %.8t] %c{1} - %m%n"));
     log4cxx::AppenderPtr consoleAppPtr(new log4cxx::ConsoleAppender(layoutPtr));
     log4cxx::BasicConfigurator::configure(consoleAppPtr);
+#ifndef NDEBUG
     //Also add file appender - see https://stackoverflow.com/questions/13967382/how-to-set-log4cxx-properties-without-property-file
     log4cxx::AppenderPtr fileAppenderPtr(new log4cxx::FileAppender(layoutPtr, fs::path(argv[0]).filename().string()+".log", false));
     log4cxx::BasicConfigurator::configure(fileAppenderPtr);
-
-    // Set log level.
-#ifndef NDEBUG
-    const auto debugLevel = log4cxx::Level::getDebug();
-    av_log_set_level(AV_LOG_VERBOSE);
-#else
-    const auto debugLevel = log4cxx::Level::getWarn();
-    av_log_set_level(AV_LOG_ERROR);
 #endif
-    log4cxx::Logger::getRootLogger()->setLevel(debugLevel);
-    logger->setLevel(debugLevel);
 
     //Parse command line options
     static const std::string PROGRAM_NAME = fs::path(argv[0]).filename().string() + " v" + std::to_string(ZOOMBOARD_SERVER_VERSION_MAJOR) + "." + std::to_string(ZOOMBOARD_SERVER_VERSION_MINOR);
@@ -157,6 +161,9 @@ int main(int argc, const char * argv[])
     ("calibration_file,c", bpo::value<std::string>(), "calibration file to use if using aruco markers, created by calibrate_camera. If none is provided, and the adjust option is also passed, then a window is provided for the user to click on the corners of the board.")
     ("output,o", bpo::value<std::string>()->default_value("output.json"), "output file or configuration file")
     ("input,i", bpo::value<std::string>()->default_value("input.json"), "input file or configuration file.")
+#ifndef NDEBUG
+    ("quiet,q", "suppresses messages that are not errors are warnings in debug builds")
+#endif
     ;
 
     bpo::variables_map vm;
@@ -170,14 +177,6 @@ int main(int argc, const char * argv[])
         LOG4CXX_FATAL(logger, "Error parsing command line arguments:" << err.what() << programDesc);
         return EXIT_FAILURE;
     }
-#ifndef NDEBUG
-    LOG4CXX_DEBUG(logger, "Program arguments:");
-    for (auto it: vm)
-    {
-        LOG4CXX_DEBUG(logger, it.first << ": " << it.second.as<std::string>());
-    }
-#endif
-
     if (vm.count("help"))
     {
         std::cout << programDesc << std::endl;
@@ -191,6 +190,34 @@ int main(int argc, const char * argv[])
 
     assert(vm.count("input"));
     assert(vm.count("output"));
+
+    // Set log level.
+#ifndef NDEBUG  //if debugging log it all.
+    const log4cxx::LevelPtr pLogLevel = log4cxx::Level::getAll();
+    assert(pLogLevel);
+    const int avLogLevel = AV_LOG_VERBOSE;
+    if (vm.count("quiet"))  //filter console logs to warnings & above, log all in the file log
+    {
+        log4cxx::filter::LevelRangeFilterPtr pFilterPtr(new log4cxx::filter::LevelRangeFilter());
+        pFilterPtr->setLevelMin(log4cxx::Level::getWarn());
+        pFilterPtr->setAcceptOnMatch(true);
+        consoleAppPtr->addFilter(pFilterPtr);
+    }
+#else
+    const log4cxx::LevelPtr pLogLevel = log4cxx::Level::getWarn();
+    const int avLogLevel = AV_LOG_WARNING;
+#endif
+    log4cxx::Logger::getRootLogger()->setLevel(pLogLevel);
+    logger->setLevel(pLogLevel);
+    libavLogger->setLevel(pLogLevel);
+    av_log_set_level(avLogLevel);
+    av_log_set_callback(&logLibAVMessages);
+
+    LOG4CXX_DEBUG(logger, "Program arguments:");
+    for (auto it: vm)
+    {
+        LOG4CXX_DEBUG(logger, it.first << ": " << it.second.as<std::string>());
+    }
 
     // -----------
     // Open the reader and start the thread to read frames
@@ -221,14 +248,6 @@ int main(int argc, const char * argv[])
     avtools::MediaReader rdr(inputOpts.begin()->first, inputOpts.begin()->second.muxerOpts);
     const AVStream* pVidStr = rdr.getVideoStream();
     LOG4CXX_DEBUG(logger, "Input stream info:\n" << avtools::getStreamInfo(pVidStr) );
-
-    // Create output folders if they do not exixt
-//    const fs::path outputFolder(vm["output_folder"].as<std::string>());
-//    for (auto& opt: opts)
-//    {
-//        opt.second.url = (outputFolder / fs::path(opt.second.url)).string();
-//        setUpOutputLocations(opt.second.url, vm.count("yes"));
-//    }
 
     std::vector<std::thread> threads;
     auto pInFrame = avtools::ThreadsafeFrame::Get(pVidStr->codecpar->width, pVidStr->codecpar->height, PIX_FMT, pVidStr->time_base);
@@ -440,7 +459,6 @@ namespace
         }
     }
 
-
     void setUpOutputLocations(const fs::path& url, bool doAssumeYes)
     {
         assert(url.has_parent_path());
@@ -500,7 +518,6 @@ namespace
 
             }
         }
-
     }
 
     Options getOptsFromStream(const AVStream* pStr)
@@ -510,6 +527,108 @@ namespace
         opts.codecOpts.add("video_size", std::to_string(pStr->codecpar->width) + "x" + std::to_string(pStr->codecpar->height));
         opts.codecOpts.add("pixel_format", std::to_string((AVPixelFormat) pStr->codecpar->format) );
         return opts;
+    }
+
+    int convertAVLevelToLog4CXXLevel(int level)
+    {
+        switch (level)
+        {
+            case AV_LOG_QUIET:
+                return log4cxx::Level::OFF_INT ;
+            case AV_LOG_DEBUG:
+                return log4cxx::Level::DEBUG_INT;
+            case AV_LOG_VERBOSE:
+                return log4cxx::Level::TRACE_INT;
+            case AV_LOG_INFO:
+                return log4cxx::Level::INFO_INT;
+            case AV_LOG_WARNING:
+                return log4cxx::Level::WARN_INT;
+            case AV_LOG_ERROR:
+                return log4cxx::Level::ERROR_INT;
+            case AV_LOG_FATAL:
+            case AV_LOG_PANIC:
+                return log4cxx::Level::FATAL_INT;
+            default:
+                return log4cxx::Level::ALL_INT;
+        }
+    }
+
+    void logLibAVMessages(void *ptr, int level, const char * fmt, va_list vaArgs)
+    {
+        std::lock_guard<std::mutex> guard(g_libavLogMutex);
+        const int av_log_level = av_log_get_level();
+        if (level >= 0)
+        {
+            level &= 0xff;
+        }
+
+        if (level > av_log_level)
+        {
+            return;
+        }
+
+        static const int LINE_SZ = 1024;
+        static std::string msg;
+        static std::string prevMsg;
+        prevMsg.reserve(LINE_SZ + 1);
+        const int flags = av_log_get_flags();
+        static bool print_prefix = true;
+        static int count = 0;
+
+        AVClass* avc = ptr ? *(AVClass **) ptr : nullptr;
+
+        if (print_prefix && avc)
+        {
+            if (avc->parent_log_context_offset)
+            {
+                AVClass** parent = *(AVClass ***) (((uint8_t *) ptr) + avc->parent_log_context_offset);
+                if (parent && *parent)
+                {
+                    msg += "|" + std::string((*parent)->item_name(parent));
+                }
+            }
+            msg += "|" + std::string(avc->item_name(ptr)) + "|\t";
+        }
+
+        char errorMsg[LINE_SZ+1];
+        int len = std::vsnprintf(errorMsg, LINE_SZ, fmt, vaArgs);
+        if (len < 0)
+        {
+            LOG4CXX_WARN(libavLogger, "Error writing error message to buffer");
+            return;
+        }
+
+        if(len > 0)
+        {
+            assert((len >= LINE_SZ) || (errorMsg[len] == '\0'));
+            char lastc = (len <= LINE_SZ ? errorMsg[len-1] : 0);
+            print_prefix = ( (lastc == '\n') || (lastc == '\r') );
+            msg += errorMsg;
+        }
+
+        if (print_prefix)
+        {
+            //sanitize error message:
+            msg.pop_back(); //remove trailing newline
+            std::transform(msg.begin(), msg.end(), msg.begin(),
+                           [](char c){
+                               return ( (c < 0x08) || (c > 0x0D && c < 0x20) ? '?' : c);
+                           });
+
+            LOG4CXX_LOG(libavLogger, log4cxx::Level::toLevel(convertAVLevelToLog4CXXLevel(level)), msg);
+            msg.clear();
+            if ( (flags & AV_LOG_SKIP_REPEATED) && (prevMsg != errorMsg) && (len > 0) && ( errorMsg[len-1] != '\r') )
+            {
+                count++;
+                LOG4CXX_ERROR(libavLogger, "    Last message repeated " << count << " times\r");
+                return;
+            }
+        }
+        if (count > 0) {
+            LOG4CXX_ERROR(libavLogger, "    Last message repeated " << count << " times\r");
+            count = 0;
+        }
+        prevMsg = errorMsg;
     }
 
     // -------------------------

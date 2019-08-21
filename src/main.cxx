@@ -107,7 +107,7 @@ namespace
     std::thread threadedWarp(std::weak_ptr<const avtools::ThreadsafeFrame> pInFrame, std::weak_ptr<avtools::ThreadsafeFrame> pWarpedFrame, const cv::Mat& trfMatrix);
 
     /// Callback function for libav log messages - used to direct them to the logger
-    /// @see av_log_default_callback
+    /// @see av_log_default_callback, https://github.com/FFmpeg/FFmpeg/blob/n4.1.3/libavutil/log.c
     /// @param[in] p ptr to a struct of which the first field is a pointer to an AVClass struct.
     /// @param[in] level message log level
     /// @param[in] fmr formatting to apply to the message
@@ -572,12 +572,12 @@ namespace
         static std::string prevMsg;
         prevMsg.reserve(LINE_SZ + 1);
         const int flags = av_log_get_flags();
-        static bool print_prefix = true;
+        static bool doPrint = true;
         static int count = 0;
 
         AVClass* avc = ptr ? *(AVClass **) ptr : nullptr;
 
-        if (print_prefix && avc)
+        if (doPrint && avc)
         {
             if (avc->parent_log_context_offset)
             {
@@ -602,14 +602,14 @@ namespace
         {
             assert((len >= LINE_SZ) || (errorMsg[len] == '\0'));
             char lastc = (len <= LINE_SZ ? errorMsg[len-1] : 0);
-            print_prefix = ( (lastc == '\n') || (lastc == '\r') );
+            doPrint = ( (lastc == '\n') || (lastc == '\r') );
             msg += errorMsg;
         }
 
-        if (print_prefix)
+        if (doPrint)
         {
-            //sanitize error message:
             msg.pop_back(); //remove trailing newline
+            //sanitize error message:
             std::transform(msg.begin(), msg.end(), msg.begin(),
                            [](char c){
                                return ( (c < 0x08) || (c > 0x0D && c < 0x20) ? '?' : c);
@@ -617,10 +617,11 @@ namespace
 
             LOG4CXX_LOG(libavLogger, log4cxx::Level::toLevel(convertAVLevelToLog4CXXLevel(level)), msg);
             msg.clear();
-            if ( (flags & AV_LOG_SKIP_REPEATED) && (prevMsg != errorMsg) && (len > 0) && ( errorMsg[len-1] != '\r') )
+            if ( (flags & AV_LOG_SKIP_REPEATED) && (len > 0) && (prevMsg == errorMsg) && ( errorMsg[len-1] != '\r') )
             {
                 count++;
-                LOG4CXX_ERROR(libavLogger, "    Last message repeated " << count << " times\r");
+                LOG4CXX_LOG(libavLogger, log4cxx::Level::toLevel(convertAVLevelToLog4CXXLevel(level)),
+                            "    Last message repeated " << count << " times\r");
                 return;
             }
         }

@@ -160,15 +160,17 @@ namespace
         cv::Mat distCoeffs_;                                ///< distortion coefficients
         cv::Ptr<cv::aruco::Dictionary> pDict_;              ///< pointer to the dictionary of aruco markers
 
-        static std::vector<cv::Point2f> GetOuterCorners(const std::vector< std::vector<cv::Point2f> >& corners)
+        std::vector<cv::Point2f> getOuterCorners() const
         {
-            std::vector<cv::Point2f> outerCorners;
-            const int n = (int) corners.size();
-            outerCorners.reserve(n);
-            for (int i = 0; i < n; ++i)
+            std::vector<cv::Point2f> outerCorners(4);
+            assert(4 == corners_.size());
+            assert(4 == ids_.size());
+            for (int i = 0; i < 4; ++i)
             {
-                outerCorners.push_back(corners[i][i]);
+                int c = ids_[i] < 2 ? ids_[i] : 5-ids_[i];
+                outerCorners[c]= (corners_[i][c]);
             }
+//            std::swap(outerCorners[2], outerCorners[3]);
             return outerCorners;
         }
     public:
@@ -226,35 +228,31 @@ namespace
             assert( corners_.size() == n );
             if (n != 4)
             {
-
+                LOG4CXX_INFO(logger, "Cannot see four markers");
+                return std::vector<cv::Point2f>();
             }
 
-            return GetOuterCorners(corners_);
+            return getOuterCorners();
         }
 
         void draw(cv::Mat& img)
         {
-            auto outerCorners = GetOuterCorners(corners_);
-            const int nCorners = (int) outerCorners.size();
-            assert(corners_.size() == nCorners);
+            const int nCorners = (int) corners_.size();
             auto color = (nCorners < 4 ? DRAGGED_COLOR : FIXED_COLOR);
-            cv::aruco::drawDetectedMarkers(img, corners_,ids_, color);
+            cv::aruco::drawDetectedMarkers(img, corners_, ids_, color);
             if (nCorners == 4)
             {
+                auto outerCorners = getOuterCorners();
+                assert(outerCorners.size() == nCorners);
                 for (int i = 0; i < 4; ++i)
                 {
                     cv::drawMarker(img, outerCorners[i], DRAGGED_COLOR, cv::MarkerTypes::MARKER_STAR, 10);
                 }
-#ifndef NDEBUG
-                static int nFrame =0;
-                cv::imwrite("marker_img" + std::to_string(nFrame++) + ".jpg", img);
-#endif
+//#ifndef NDEBUG
+//                static int nFrame =0;
+//                cv::imwrite("marker_img" + std::to_string(nFrame++) + ".jpg", img);
+//#endif
             }
-//            for (int i = 0; i < nCorners; ++i)
-//            {
-//                cv::drawMarker(img, outerCorners[i], color, cv::MarkerTypes::MARKER_SQUARE, 5);
-//                cv::putText(img, std::to_string(ids_[i]), outerCorners[i], cv::FONT_HERSHEY_SIMPLEX, 0.5, color);
-//            }
         }
     };  // MarkerDirectedBoardFinder
 }

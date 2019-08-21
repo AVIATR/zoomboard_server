@@ -1,14 +1,16 @@
 {
-    "url": "0",
-    "muxer_options":
+    "0":
     {
-        "name" : "avfoundation",
-        "framerate": "30/1",
-        "video_size": "848x480",
-        "pixel_format": "rgb24"
-    },
-    "codec_options":
-    {
-        "skip_frame": "1"
+        "muxer_options":
+        {
+            "name" : "avfoundation",
+            "framerate": "30/1",
+            "video_size": "848x480",
+            "pixel_format": "rgb24"
+        },
+        "codec_options":
+        {
+            "skip_frame": "1"
+        }
     }
 }

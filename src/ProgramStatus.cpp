@@ -44,7 +44,10 @@ logger_(logger)
 
 ProgramStatus::~ProgramStatus()
 {
-    logExceptions();
+    if (logger_)
+    {
+        logExceptions();
+    }
 }
 
 void ProgramStatus::end()

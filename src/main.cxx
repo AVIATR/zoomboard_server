@@ -16,14 +16,16 @@
 #include <mutex>
 #include <functional>
 #include <iostream>
+
 #include <log4cxx/logger.h>
 #include <log4cxx/basicconfigurator.h>
 #include <log4cxx/consoleappender.h>
+#include <log4cxx/patternlayout.h>
 #ifndef NDEBUG
 #include <log4cxx/fileappender.h>
 #include <log4cxx/filter/levelrangefilter.h>
 #endif
-#include <log4cxx/patternlayout.h>
+
 #include <boost/program_options.hpp>
 #include "opencv2/core.hpp"
 #include "opencv2/imgproc.hpp"
@@ -162,7 +164,7 @@ int main(int argc, const char * argv[])
     ("output,o", bpo::value<std::string>()->default_value("output.json"), "output file or configuration file")
     ("input,i", bpo::value<std::string>()->default_value("input.json"), "input file or configuration file.")
 #ifndef NDEBUG
-    ("quiet,q", "suppresses messages that are not errors are warnings in debug builds")
+    ("quiet,q", "suppresses messages that are not errors or warnings in debug builds")
 #endif
     ;
 
@@ -313,7 +315,7 @@ int main(int argc, const char * argv[])
     {
         LOG4CXX_DEBUG(logger, "Will apply perspective transform using transformation matrix: " << trfMatrix);
         assert( (AV_NOPTS_VALUE == (*pTrfFrame)->best_effort_timestamp) && (AV_NOPTS_VALUE == (*pTrfFrame)->pts) );
-        threads.emplace_back(threadedWarp(pInFrame, pTrfFrame, trfMatrix));
+        threads.emplace_back( threadedWarp(pInFrame, pTrfFrame, trfMatrix) );
         // add writers to writer perspective transformed frames
         for (auto &writer : writers)
         {
@@ -371,55 +373,44 @@ namespace
         }
     }
 
-    std::pair<std::string, Options> getOptsFromMapNode(const cv::FileNode& node)
+    Options getOptsFromMapNode(const cv::FileNode& node)
     {
         if (!node.isMap())
         {
-            throw std::runtime_error("Unable to parse node.");
+            throw std::runtime_error("Unable to parse options for url " + node.name());
         }
-        std::pair<std::string, Options> opts;
-
-        //Find url
-        auto n = node["url"];
-        if (!n.isString())
-        {
-            throw std::runtime_error("Unable to parse url");
-        }
-        else
-        {
-            n >> opts.first;
-        }
+        Options opts;
 
         //Find muxer options
-        n = node["muxer_options"];
+        auto n = node["muxer_options"];
         if (n.empty() || n.isNone())
         {
-            LOG4CXX_INFO(logger, "No muxer options found for " << opts.first);
+            LOG4CXX_INFO(logger, "No muxer options found for " << node.name());
         }
         else if (n.isMap())
         {
             //Read all options to dict
-            readMapIntoDict(n, opts.second.muxerOpts);
+            readMapIntoDict(n, opts.muxerOpts);
         }
         else
         {
-            throw std::runtime_error("Unable to parse muxer options for " + opts.first);
+            throw std::runtime_error("Unable to parse muxer options for " + node.name());
         }
 
         //Find codec options
         n = node["codec_options"];
         if (n.empty() || n.isNone())
         {
-            LOG4CXX_INFO(logger, "No codec options found for " << opts.first);
+            LOG4CXX_INFO(logger, "No codec options found for " << node.name());
         }
         else if (n.isMap())
         {
             //Read all options to dict
-            readMapIntoDict(n, opts.second.codecOpts);
+            readMapIntoDict(n, opts.codecOpts);
         }
         else
         {
-            throw std::runtime_error("Unable to parse codec options for " + opts.first);
+            throw std::runtime_error("Unable to parse codec options for " + node.name());
         }
         return opts;
     }
@@ -427,56 +418,50 @@ namespace
     std::map<std::string, Options> getOptions(const std::string& configFile)
     {
         std::map<std::string, Options> opts;
-        cv::FileStorage cfs(configFile, cv::FileStorage::READ);
-        cv::FileNode root = cfs.root();
+        LOG4CXX_DEBUG(logger, "Reading configuration file " << configFile);
+        cv::FileStorage cfs;
+        cfs.open(configFile, cv::FileStorage::READ | cv::FileStorage::FORMAT_JSON);
         try
         {
-            if (root.isSeq())
+            assert (cfs.isOpened());
+            for (auto url: cfs.root())
             {
-                //assume that there are several configuration options, most likely for output
-                for (auto subNode: root)
+                auto opt = getOptsFromMapNode(url);
+                if ( opts.find(url.name()) != opts.end() )
                 {
-                    auto val = getOptsFromMapNode(subNode);
-                    if ( opts.find(val.first) != opts.end() )
-                    {
-                        throw std::runtime_error("Multiple options found for url: " + val.first);
-                    }
-                    opts[val.first] = val.second;
+                    throw std::runtime_error("Multiple options found for url: " + url.name());
                 }
-                return opts;
+                opts[url.name()] = opt;
             }
-            else
-            {
-                //assume it is a map. getOptsFromNode will throw if not
-                auto val = getOptsFromMapNode(root);
-                opts[val.first] = val.second;
-                return opts;
-            }
+            return opts;
         }
         catch (std::exception& err)
         {
-            std::throw_with_nested( std::runtime_error("Unable to parse " + configFile) );
+            LOG4CXX_ERROR(logger, err.what());
+            std::throw_with_nested( std::runtime_error("Unable to open configuration file " + configFile) );
         }
     }
 
     void setUpOutputLocations(const fs::path& url, bool doAssumeYes)
     {
-        assert(url.has_parent_path());
-        fs::path parent = url.parent_path();
-        //See if it exists or needs to be created
-        if ( !fs::exists(parent) )
+        fs::path parent = url.has_parent_path() ? url.parent_path() : ".";
+        if (!url.has_parent_path())
         {
-            LOG4CXX_DEBUG(logger, "Url folder " << parent << " does not exist. Creating.");
-            if (!fs::create_directory(parent))
+            //See if it exists or needs to be created
+            if ( !fs::exists(parent) )
             {
-                throw std::runtime_error("Unable to create folder " + parent.string());
+                LOG4CXX_DEBUG(logger, "Url folder " << parent << " does not exist. Creating.");
+                if (!fs::create_directory(parent))
+                {
+                    throw std::runtime_error("Unable to create folder " + parent.string());
+                }
             }
+            else if (!fs::is_directory(parent))
+            {
+                throw std::runtime_error(parent.string() + " exists, and is not a folder.");
+            }
+            assert(fs::is_directory(parent));
         }
-        else if (!fs::is_directory(parent))
-        {
-            throw std::runtime_error(parent.string() + " exists, and is not a folder.");
-        }
-        assert(fs::is_directory(parent));
         // Remove old stream files if they're around
         fs::path prefix = url.stem();
         LOG4CXX_DEBUG(logger, "Will remove " << prefix << "* from " << parent);
@@ -513,7 +498,7 @@ namespace
                               });
                 LOG4CXX_DEBUG(logger, "Removed " << nFilesRemoved << " of " << filesToRemove.size() << " files.");
 #else
-                std::for_each(filesToRemove.begin(), filesToRemove.end(), [](const bfs::path& p){bfs::remove(p);});
+                std::for_each(filesToRemove.begin(), filesToRemove.end(), [](const fs::path& p){fs::remove(p);});
 #endif
 
             }
@@ -767,7 +752,9 @@ namespace
                             assert( (av_cmp_q(warpedFrame.timebase, inFrame.timebase) == 0) && (warpedFrame.type == AVMediaType::AVMEDIA_TYPE_VIDEO) && (inFrame.type == AVMediaType::AVMEDIA_TYPE_VIDEO) );
                             cv::Mat inImg = getImage(inFrame);  //should we instead copy this data to this thread?
                             cv::Mat outImg = getImage(warpedFrame);
-                            cv::warpPerspective(inImg, outImg, trfMatrix, inImg.size(), cv::InterpolationFlags::INTER_LANCZOS4);
+                            LOG4CXX_DEBUG(logger, "Warper using transformation matrix: " << trfMatrix );
+                            LOG4CXX_DEBUG(logger, "output image data is at: " << (void*) outImg.data );
+                            cv::warpPerspective(inImg, outImg, trfMatrix, outImg.size(), cv::InterpolationFlags::INTER_LANCZOS4);
                             int ret = av_frame_copy_props(warpedFrame.get(), inFrame.get());
                             if (ret < 0)
                             {

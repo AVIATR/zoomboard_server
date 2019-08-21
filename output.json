@@ -1,6 +1,6 @@
-[
-    {        
-        "url": "stream_lr.m3u8",
+{
+    "stream_lr.m3u8": 
+    {
         "muxer_options":
         {
             "framerate": "30/1",
@@ -31,8 +31,8 @@
             "tune": "zerolatency"
         }
     },
+    "stream_hr.m3u8":
     {
-        "url": "stream_hr.m3u8",
         "muxer_options":
         {
             "framerate": "1/1",
@@ -63,4 +63,4 @@
             "tune": "zerolatency"
         }
     }
-]
+}

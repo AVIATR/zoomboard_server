@@ -350,7 +350,7 @@ cv::Mat_<double> getPerspectiveTransformationMatrix(std::weak_ptr<const avtools:
 #endif
                 warpedImg = 0;
                 cv::warpPerspective(inputImg, warpedImg, trfMatrix, warpedImg.size(), cv::InterpolationFlags::INTER_LINEAR);
-                cv::imshow(OUTPUT_WINDOW_NAME, warpedImg(roi));
+                cv::imshow(OUTPUT_WINDOW_NAME, warpedImg);
                 for (int i = 0; i < 4; ++i)
                 {
                     cv::line(inputImg, corners[i], corners[(i+1) % 4], FIXED_COLOR);

@@ -42,7 +42,7 @@ extern "C" {
 #include "MediaWriter.hpp"
 #include "Media.hpp"
 #include "ThreadsafeFrame.hpp"
-#include "ProgramStatus.hpp"
+#include "ThreadManager.hpp"
 #include "correct_perspective.hpp"
 #include "libav2opencv.hpp"
 
@@ -123,7 +123,7 @@ namespace
 } //::<anon>
 
 /// Maintains communication between threads re: exceptions & program end
-ProgramStatus g_Status(logger);
+ThreadManager g_ThreadMan;
 
 // The command we are trying to implement for one output stream is
 // sudo avconv -f video4linux2 -r 5 -s hd1080 -i /dev/video0 \
@@ -133,17 +133,18 @@ ProgramStatus g_Status(logger);
 int main(int argc, const char * argv[])
 {
     // Set up signal handler to end program
-    std::signal( SIGINT, [](int){g_Status.end();} );
+    std::signal( SIGINT, [](int){g_ThreadMan.end();} );
     std::cout << "press Ctrl+C to exit..." << std::endl;
 
     // Set up logger. See https://logging.apache.org/log4cxx/latest_stable/usage.html for more info,
     //see https://logging.apache.org/log4cxx/latest_stable/apidocs/classlog4cxx_1_1_pattern_layout.html for patterns
     log4cxx::MDC::put("threadname", "main");    //add name of thread
-    log4cxx::LayoutPtr layoutPtr(new log4cxx::PatternLayout("%d %-5p [%-8X{threadname} %.8t] %c{1} - %m%n"));
-    log4cxx::AppenderPtr consoleAppPtr(new log4cxx::ConsoleAppender(layoutPtr));
+    log4cxx::LayoutPtr colorLayoutPtr(new log4cxx::ColorPatternLayout(LOG_FORMAT_STRING));
+    log4cxx::AppenderPtr consoleAppPtr(new log4cxx::ConsoleAppender(colorLayoutPtr));
     log4cxx::BasicConfigurator::configure(consoleAppPtr);
 #ifndef NDEBUG
     //Also add file appender - see https://stackoverflow.com/questions/13967382/how-to-set-log4cxx-properties-without-property-file
+    log4cxx::LayoutPtr layoutPtr(new log4cxx::PatternLayout(LOG_FORMAT_STRING));
     log4cxx::AppenderPtr fileAppenderPtr(new log4cxx::FileAppender(layoutPtr, fs::path(argv[0]).filename().string()+".log", false));
     log4cxx::BasicConfigurator::configure(fileAppenderPtr);
 #endif
@@ -251,9 +252,8 @@ int main(int argc, const char * argv[])
     const AVStream* pVidStr = rdr.getVideoStream();
     LOG4CXX_DEBUG(logger, "Input stream info:\n" << avtools::getStreamInfo(pVidStr) );
 
-    std::vector<std::thread> threads;
     auto pInFrame = avtools::ThreadsafeFrame::Get(pVidStr->codecpar->width, pVidStr->codecpar->height, PIX_FMT, pVidStr->time_base);
-    threads.emplace_back(threadedRead(pInFrame, rdr));
+    g_ThreadMan.addThread(threadedRead(pInFrame, rdr));
 
     // -----------
     // Open the outputs and start writer threads
@@ -308,38 +308,28 @@ int main(int argc, const char * argv[])
         // add writers to writer input frames
         for (auto &writer : writers)
         {
-            threads.emplace_back( threadedWrite(pInFrame, writer) );
+            g_ThreadMan.addThread( threadedWrite(pInFrame, writer) );
         }
     }
     else  // Start the warper thread
     {
         LOG4CXX_DEBUG(logger, "Will apply perspective transform using transformation matrix: " << trfMatrix);
         assert( (AV_NOPTS_VALUE == (*pTrfFrame)->best_effort_timestamp) && (AV_NOPTS_VALUE == (*pTrfFrame)->pts) );
-        threads.emplace_back( threadedWarp(pInFrame, pTrfFrame, trfMatrix) );
+        g_ThreadMan.addThread( threadedWarp(pInFrame, pTrfFrame, trfMatrix) );
         // add writers to writer perspective transformed frames
         for (auto &writer : writers)
         {
-            threads.emplace_back( threadedWrite(pTrfFrame, writer) );
+            g_ThreadMan.addThread( threadedWrite(pTrfFrame, writer) );
         }
     }
 
     // -----------
     // Cleanup
     // -----------
-    //TODO: There is a potential issue of the program (likely the reader thread) crashes before all threads are joined.
-    // We should switch to a task oriented approach or move the thread pool to programstatus, which joins the threads before ending
-    for (auto& thread: threads)
+    g_ThreadMan.join();
+    if (g_ThreadMan.hasExceptions())
     {
-        if (thread.joinable())
-        {
-            thread.join();  //wait for all threads to finish
-        }
-    }
-
-    if (g_Status.hasExceptions())
-    {
-        LOG4CXX_ERROR(logger, "Exiting with errors: ");
-        g_Status.logExceptions();
+        LOG4CXX_ERROR(logger, "Exiting with errors...");
         return EXIT_FAILURE;
     }
     LOG4CXX_DEBUG(logger, "Exiting successfully...");
@@ -627,12 +617,12 @@ namespace
             {
                 log4cxx::MDC::put("threadname", "reader");
                 avtools::Frame frame(*rdr.getVideoStream()->codecpar);
-                while (!g_Status.isEnded())
+                while (!g_ThreadMan.isEnded())
                 {
                     const AVStream* pS = rdr.read(frame);
                     if (!pS)
                     {
-                        g_Status.end(); //if the reader ends, end program
+                        g_ThreadMan.end(); //if the reader ends, end program
                         break;
                     }
                     frame->best_effort_timestamp -= pS->start_time;
@@ -655,8 +645,8 @@ namespace
                 }
                 catch (...)
                 {
-                    g_Status.addException(std::current_exception());
-                    g_Status.end();
+                    g_ThreadMan.addException(std::current_exception());
+                    g_ThreadMan.end();
                 }
             }
             LOG4CXX_DEBUG(logger, "Exiting reader thread.");
@@ -670,7 +660,7 @@ namespace
             {
                 log4cxx::MDC::put("threadname", "writer: " + writer.url());
                 avtools::TimeType ts = AV_NOPTS_VALUE;
-                while (!g_Status.isEnded())
+                while (!g_ThreadMan.isEnded())
                 {
                     auto ppFrame = pFrame.lock();
                     if (!ppFrame)
@@ -682,8 +672,8 @@ namespace
                     const auto& inFrame = *ppFrame;
                     {
                         auto lock = inFrame.getReadLock();
-                        inFrame.cv.wait(lock, [&inFrame, ts](){return g_Status.isEnded() || (inFrame->best_effort_timestamp > ts);});   //note that we assume the timebase of the incoming frames do not change
-                        if (g_Status.isEnded())
+                        inFrame.cv.wait(lock, [&inFrame, ts](){return g_ThreadMan.isEnded() || (inFrame->best_effort_timestamp > ts);});   //note that we assume the timebase of the incoming frames do not change
+                        if (g_ThreadMan.isEnded())
                         {
                             writer.write(nullptr, avtools::TimeBaseType{});
                             break;
@@ -704,8 +694,8 @@ namespace
                 }
                 catch (...)
                 {
-                    g_Status.addException(std::current_exception());
-                    g_Status.end();
+                    g_ThreadMan.addException(std::current_exception());
+                    g_ThreadMan.end();
                 }
             }
             //Cleanup writer
@@ -720,12 +710,12 @@ namespace
             {
                 log4cxx::MDC::put("threadname", "warper");
                 avtools::TimeType ts = AV_NOPTS_VALUE;
-                while (!g_Status.isEnded())
+                while (!g_ThreadMan.isEnded())
                 {
                     auto ppInFrame = pInFrame.lock();
                     if (!ppInFrame)
                     {
-                        if (g_Status.isEnded())
+                        if (g_ThreadMan.isEnded())
                         {
                             break;
                         }
@@ -734,8 +724,8 @@ namespace
                     const auto& inFrame = *ppInFrame;
                     {
                         auto rLock = inFrame.getReadLock();
-                        inFrame.cv.wait(rLock, [&inFrame, ts](){return g_Status.isEnded() ||  (inFrame->best_effort_timestamp > ts);});    //wait until fresh frame is available
-                        if (g_Status.isEnded())
+                        inFrame.cv.wait(rLock, [&inFrame, ts](){return g_ThreadMan.isEnded() ||  (inFrame->best_effort_timestamp > ts);});    //wait until fresh frame is available
+                        if (g_ThreadMan.isEnded())
                         {
                             break;
                         }
@@ -775,11 +765,11 @@ namespace
                 }
                 catch (...)
                 {
-                    g_Status.addException(std::current_exception());
-                    g_Status.end();
+                    g_ThreadMan.addException(std::current_exception());
+                    g_ThreadMan.end();
                 }
             }
-            LOG4CXX_DEBUG(logger, "Exiting warper thread: isEnded=" << std::boolalpha << g_Status.isEnded());
+            LOG4CXX_DEBUG(logger, "Exiting warper thread: isEnded=" << std::boolalpha << g_ThreadMan.isEnded());
         });
     }
 

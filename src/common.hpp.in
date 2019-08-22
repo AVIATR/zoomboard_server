@@ -13,6 +13,8 @@
 #define ZOOMBOARD_SERVER_VERSION @PROJECT_VERSION@
 
 #include <string>
+#include <log4cxx/helpers/pool.h>
+#include <log4cxx/patternlayout.h>
 
 #if __cplusplus > 201703L
 #include <filesystem.hpp> //If C++17, use std::filesystem
@@ -27,7 +29,9 @@ static const int MARKER_X = 2;
 static const int MARKER_Y = 2;
 static constexpr float MARKER_SEP = 0.05f;
 static constexpr float MARKER_LEN = 0.05f;
-
+static const char MARKER_FILE_DEFAULT[] = "markers.json";
+static const char CALIBRATION_FILE_DEFAULT[] = "calibration.json";
+static const char LOG_FORMAT_STRING[] = "%d %-5p [%-8X{threadname} %.8t] %c{1} - %m%n";
 
 #ifndef NDEBUG
 /// Returns the type of an opencv matrix - for debugging
@@ -41,5 +45,26 @@ std::string type2str(int type);
 /// @param[in] prompt prompt text
 /// @return true if the answer is Y or y, false if n or N
 bool promptYesNo(const std::string& prompt);
+
+
+namespace log4cxx
+{
+    /// @class Color Pattern Layout to print colorized console outputs using log4cxx
+    /// @see https://stackoverflow.com/questions/14118703/how-to-set-colour-of-console-output-of-log4cxx
+    class LOG4CXX_EXPORT ColorPatternLayout : public log4cxx::PatternLayout
+    {
+    public:
+        DECLARE_LOG4CXX_OBJECT(ColorPatternLayout)
+        BEGIN_LOG4CXX_CAST_MAP()
+        LOG4CXX_CAST_ENTRY(ColorPatternLayout)
+        LOG4CXX_CAST_ENTRY_CHAIN(Layout)
+        END_LOG4CXX_CAST_MAP()
+
+        ColorPatternLayout();
+        ColorPatternLayout(const log4cxx::LogString &s);
+        virtual void format(log4cxx::LogString &output, const log4cxx::spi::LoggingEventPtr &event, log4cxx::helpers::Pool &pool) const override;
+    };  //log4cxx::ColorPatternLayout
+    LOG4CXX_PTR_DEF(ColorPatternLayout);
+}   //::log4cxx
 
 #endif /* common_hpp */

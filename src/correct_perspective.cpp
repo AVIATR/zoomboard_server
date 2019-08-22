@@ -12,9 +12,9 @@
 #include "opencv2/imgproc.hpp"
 #include "opencv2/aruco.hpp"
 #include "libav2opencv.hpp"
-#include "ProgramStatus.hpp"
+#include "ThreadManager.hpp"
 
-extern ProgramStatus g_Status;
+extern ThreadManager g_ThreadMan;
 
 namespace
 {
@@ -280,7 +280,7 @@ cv::Mat_<double> getPerspectiveTransformationMatrix(std::weak_ptr<const avtools:
     }
     //Start the loop
     std::vector<cv::Point2f> corners;
-    while ( !g_Status.isEnded() && (cv::waitKey(20) < 0) )    //wait for key press
+    while ( !g_ThreadMan.isEnded() && (cv::waitKey(20) < 0) )    //wait for key press
     {
         auto ppFrame = pFrame.lock();
         if (!ppFrame)
@@ -360,7 +360,7 @@ cv::Mat_<double> getPerspectiveTransformationMatrix(std::weak_ptr<const avtools:
             cv::imshow(INPUT_WINDOW_NAME, inputImg);
         }
     }
-    if (!g_Status.isEnded())
+    if (!g_ThreadMan.isEnded())
     {
         if (corners.size() == 4)
         {

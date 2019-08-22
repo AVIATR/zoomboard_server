@@ -1,36 +1,38 @@
 //
-//  ProgramStatus.hpp
+//  ThreadManager.hpp
 //  zoomboard_server
 //
 //  Created by Ender Tekin on 8/7/19.
 //
 
-#ifndef ProgramStatus_hpp
-#define ProgramStatus_hpp
+#ifndef ThreadManager_hpp
+#define ThreadManager_hpp
 
 #include <mutex>
+#include <thread>
 #include <vector>
 #include <stdexcept>
-#include <log4cxx/logger.h>
 
 /// @class Synchronization thread to signal end and capture exceptions from threads
-class ProgramStatus
+class ThreadManager
 {
 private:
     mutable std::mutex mutex_;                      ///< mutex to use when adding exceptions
     std::atomic_bool doEnd_;                        ///< set to true to signal program should end
     std::vector<std::exception_ptr> exceptions_;    ///< list of stored exceptions
-    log4cxx::LoggerPtr logger_;                     ///< Logger used for logging the stored exceptions
+    std::vector<std::thread> threads_;              ///< list of running threads
 public:
     /// Ctor
-    /// @param[in] logger logger to use when logging exceptions
-    ProgramStatus( log4cxx::LoggerPtr logger = nullptr);
+    ThreadManager();
     /// Dtor
-    ~ProgramStatus();
+    ~ThreadManager();
     /// Used to signal the program to end.
     void end();
     /// @return true if the program has been signaled to end
     bool isEnded() const;
+    /// Adds a thread to the list of managed threads
+    /// @param[in] thread new thread to add.
+    void addThread(std::thread&& thread);
     /// Used to log an exception from a thread. This also signals program end
     /// @param[in] an exception pointer. This will be stored and later logged at program end
     void addException(std::exception_ptr errPtr);
@@ -38,6 +40,8 @@ public:
     bool hasExceptions() const;
     /// Logs all the exceptions. Once logged, all exceptions are cleared.
     void logExceptions();
-};  //::<anon>::ProgramStatus
+    /// Wait for threads to complete
+    void join();
+};  //::<anon>::ThreadManager
 
-#endif /* ProgramStatus_hpp */
+#endif /* ThreadManager_hpp */

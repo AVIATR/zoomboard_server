@@ -61,28 +61,26 @@ bool promptYesNo(const std::string& prompt)
 
 namespace log4cxx
 {
-    IMPLEMENT_LOG4CXX_OBJECT(ColorPatternLayout);
     ColorPatternLayout::ColorPatternLayout() : PatternLayout(){}
 
     ColorPatternLayout::ColorPatternLayout(const LogString &s): PatternLayout(s){}
 
     void ColorPatternLayout::format(LogString &output, const spi::LoggingEventPtr &event, helpers::Pool &pool) const
     {
-        LogString tmp;
-        PatternLayout::format(tmp,event,pool);
         LevelPtr lvl = event->getLevel();
-        switch (lvl->toInt()){
+        switch (lvl->toInt())
+        {
             case Level::FATAL_INT:
-                output.append("\u001b[41;1m"); //red FG, bright
+                output.append("\u001b[31;1m"); //red FG, bright
                 break;
             case Level::ERROR_INT:
-                output.append("\u001b[41m"); // red FG
+                output.append("\u001b[31m"); // red FG
                 break;
             case Level::WARN_INT:
                 output.append("\u001b[33m"); //Yellow FG
                 break;
             case Level::INFO_INT:
-                output.append("\u001b[0;1m"); // Bright
+                output.append("\u001b[0m"); // Regular
                 break;
             case Level::DEBUG_INT:
                 output.append("\u001b[32m"); // Green FG
@@ -93,8 +91,9 @@ namespace log4cxx
             default:
                 break;
         }
+        LogString tmp;
+        PatternLayout::format(tmp, event, pool);
         output.append(tmp);
-        output.append("\u001b[m");
+        output.append("\u001b[m");  //reset
     }
-
-}
+}   //::log4cxx

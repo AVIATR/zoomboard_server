@@ -53,21 +53,19 @@ namespace
     /// @param[in] distCoeffs vector of distortion coefficients
     void saveCalibrationOutputs(const std::string& calibrationFile, const cv::Ptr<cv::aruco::Dictionary> dict, const cv::Mat& cameraMatrix, const cv::Mat& distCoeffs);
 
+    const char LOG_FORMAT_STRING[] = "%d %-5p %c{1} - %m%n";
 } //::<anon>
 
-// The command we are trying to implement for one output stream is
-// sudo avconv -f video4linux2 -r 5 -s hd1080 -i /dev/video0 \
-//  -vf "format=yuv420p,framerate=5" -c:v libx264 -profile:v:0 high -level 3.0 -flags +cgop -g 1 \
-//  -hls_time 0.1 -hls_allow_cache 0 -an -preset ultrafast /mnt/hls/stream.m3u8
-// For further help, see https://libav.org/avconv.html
 int main(int argc, const char * argv[])
 {
     // Set up logger. See https://logging.apache.org/log4cxx/latest_stable/usage.html for more info,
     //see https://logging.apache.org/log4cxx/latest_stable/apidocs/classlog4cxx_1_1_pattern_layout.html for patterns
-    log4cxx::LayoutPtr layoutPtr(new log4cxx::PatternLayout("%d %-5p %c{1} - %m%n"));
-    log4cxx::AppenderPtr consoleAppPtr(new log4cxx::ConsoleAppender(layoutPtr));
+
+    log4cxx::LayoutPtr colorLayoutPtr(new log4cxx::ColorPatternLayout(LOG_FORMAT_STRING));
+    log4cxx::AppenderPtr consoleAppPtr(new log4cxx::ConsoleAppender(colorLayoutPtr));
     log4cxx::BasicConfigurator::configure(consoleAppPtr);
 #ifndef NDEBUG
+    log4cxx::LayoutPtr layoutPtr(new log4cxx::PatternLayout(LOG_FORMAT_STRING));
     //Also add file appender - see https://stackoverflow.com/questions/13967382/how-to-set-log4cxx-properties-without-property-file
     log4cxx::AppenderPtr fileAppenderPtr(new log4cxx::FileAppender(layoutPtr, fs::path(argv[0]).filename().string()+".log", false));
     log4cxx::BasicConfigurator::configure(fileAppenderPtr);

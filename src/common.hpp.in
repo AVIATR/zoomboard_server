@@ -31,7 +31,6 @@ static constexpr float MARKER_SEP = 0.05f;
 static constexpr float MARKER_LEN = 0.05f;
 static const char MARKER_FILE_DEFAULT[] = "markers.json";
 static const char CALIBRATION_FILE_DEFAULT[] = "calibration.json";
-static const char LOG_FORMAT_STRING[] = "%d %-5p [%-8X{threadname} %.8t] %c{1} - %m%n";
 
 #ifndef NDEBUG
 /// Returns the type of an opencv matrix - for debugging

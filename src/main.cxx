@@ -117,6 +117,8 @@ namespace
     void logLibAVMessages(void *p, int level, const char * fmt, va_list vaArgs);
 
     // Initialize logger
+    static const char LOG_FORMAT_STRING[] = "%d %-5p [%-8X{threadname} %.8t] %c{1} - %m%n";
+
     log4cxx::LoggerPtr logger(log4cxx::Logger::getLogger("zoombrd"));
     log4cxx::LoggerPtr libavLogger(log4cxx::Logger::getLogger("zoombrd.libav"));
     std::mutex g_libavLogMutex;

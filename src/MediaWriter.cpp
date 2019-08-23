@@ -120,29 +120,59 @@ namespace avtools
             if ( (pFrame->width != pCodecPar->width) || (pFrame->height != pCodecPar->height) )
             {
                 {
-                    Dictionary args;
-                    args.add("w", pStr->codecpar->width);
-                    args.add("h", pStr->codecpar->height);
-                    addFilterToGraph("scale", "resize", args, pGraph_);
+                    Dictionary scaleArgs, padArgs;
+                    float cW = (float) pCodecPar->width / (float) pFrame->width;
+                    float cH = (float) pCodecPar->height / (float) pFrame->height;
+                    if ( cW > cH )
+                    {
+                        scaleArgs.add("w", -1);
+                        scaleArgs.add("h", pCodecPar->height);
+                        float pad = (pCodecPar->width - cH * pFrame->width) / 2.f;
+                        padArgs.add("w", pCodecPar->width);
+                        padArgs.add("h", pCodecPar->height);
+                        padArgs.add("x", pad > 0 ? (int) pad : 0);
+                        padArgs.add("y", 0);
+                    }
+                    else if ( cW < cH )
+                    {
+                        scaleArgs.add("w", pCodecPar->width);
+                        scaleArgs.add("h", -1);
+                        float pad = (pCodecPar->height - cW * pFrame->height) / 2.f;
+                        padArgs.add("w", pCodecPar->width);
+                        padArgs.add("h", pCodecPar->height);
+                        padArgs.add("x", 0);
+                        padArgs.add("y", pad > 0 ? (int) pad : 0);
+                    }
+                    else
+                    {
+                        scaleArgs.add("w", pCodecPar->width);
+                        scaleArgs.add("h", pCodecPar->height);
+                    }
+                    addFilterToGraph("scale", "resize", scaleArgs, pGraph_);
                     LOG4CXX_DEBUG(logger, "Added scale filter to convert from "
                                   << pFrame->width << "x" << pFrame->height << " to "
-                                  << pCodecPar->width << "x" << pCodecPar->height);
+                                  << cW * pFrame->width << "x" << cW * pFrame->height);
+                    //Pad output if need be to match the requested output size
+                    if ( !padArgs.empty() )
+                    {
+                        addFilterToGraph("pad", "add_padding", padArgs, pGraph_);
+                        LOG4CXX_DEBUG(logger, "Added scale filter to pad to "
+                                      << pCodecPar->width << "x" << pCodecPar->height);
+                    }
                 }
             }
-
-            // Init format filter if input & output have different pixel formats
-            if ( pFrame->format != pStr->codecpar->format )
+            if ( pFrame->format != pCodecPar->format ) // Init format filter if needed. If scale filter is active, this is automatic
             {
                 {
                     Dictionary args;
-                    args.add("pix_fmts", pStr->codecpar->format);
+                    args.add("pix_fmts", pCodecPar->format);
                     addFilterToGraph("format", "change format", args, pGraph_);
                     LOG4CXX_DEBUG(logger, "Added format filter to convert from " << (AVPixelFormat) pFrame->format
                                   << " to " << (AVPixelFormat) pCodecPar->format);
                 }
             }
 
-            // Init aspect ratio filter if input & output have different aspect ratios
+            // Init aspect ratio filter if input & output have different sample aspect ratios -> this is pixel-wise!
             if ( 0 != av_cmp_q(pFrame->sample_aspect_ratio, pCodecPar->sample_aspect_ratio) )
             {
                 {
@@ -186,6 +216,7 @@ namespace avtools
         void encodeFrame(const AVFrame* pFrame)
         {
             assert(stream());
+            LOG4CXX_DEBUG(logger, "Writer encoding frame");
             const avtools::TimeBaseType timebase = stream()->time_base;
             // Encode frame -> send frame to encoder, then read available packets & mux them.
             int ret = avcodec_send_frame(codecCtx_.get(), pFrame);
@@ -200,9 +231,11 @@ namespace avtools
                     throw MediaError("Error flushing encoder", ret);
                 }
             }
+            assert(0 == ret);
             pkt_.unref();
             while (true) //read all available packets from encoder, and mux them
             {
+                LOG4CXX_DEBUG(logger, "Writer reading packet from encoder");
                 ret = avcodec_receive_packet(codecCtx_.get(), pkt_.get());
                 if (ret == AVERROR(EAGAIN))
                 {
@@ -216,13 +249,14 @@ namespace avtools
                 {
                     throw MediaError("Error reading packets from encoder", ret);
                 }
+                assert(0 == ret);
 
                 pkt_->stream_index = 0; //only one output stream
                 av_packet_rescale_ts(pkt_.get(), codecCtx_->time_base, timebase);
 //                pkt_->dts = AV_NOPTS_VALUE;  //let the muxer figure this out
 //                pkt_->pts = av_rescale_q(pkt_->pts, codecCtx_->time_base, timebase);   //this is necessary since writing the header can change the time_base of the stream.
 //                pkt_->duration = av_rescale_q(pkt_->duration, codecCtx_->time_base, timebase);
-                LOG4CXX_DEBUG(logger, "Writing packet:\n " << pkt_.info(1));
+                LOG4CXX_DEBUG(logger, "Muxing packet to " << url() << ":\n " << pkt_.info(1));
                 //mux encoded frame
 //                ret = av_interleaved_write_frame(formatCtx_.get(), pkt_.get());
                 ret = av_write_frame(formatCtx_.get(), pkt_.get()); //only one stream
@@ -230,6 +264,7 @@ namespace avtools
                 {
                     throw MediaError("Error muxing packet", ret);
                 }
+                assert(0 == ret);
             }
         }
 
@@ -509,6 +544,7 @@ namespace avtools
             }
 
             /// Push frame to filtergraph
+            LOG4CXX_DEBUG(logger, "Writer pushing frame to filtergraph");
             int ret = av_buffersrc_write_frame(pIn_->filter_ctx, pFrame);
             if (ret < 0)
             {
@@ -518,6 +554,7 @@ namespace avtools
             /// Pop output frames from filtergraph
             while (true)
             {
+                LOG4CXX_DEBUG(logger, "Writre reading frames from filtergraph");
                 avtools::TimeBaseType outTimebase = av_buffersink_get_time_base(pOut_->filter_ctx);
                 ret = av_buffersink_get_frame(pOut_->filter_ctx, filtFrame_.get());
                 if ( (ret == AVERROR(EAGAIN)) || (ret == AVERROR_EOF) )

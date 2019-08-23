@@ -103,6 +103,10 @@ void ThreadManager::join()
     {
         if (thread.joinable())
         {
+#ifndef NDEBUG
+            auto logger = log4cxx::Logger::getLogger("zoombrd");
+            LOG4CXX_DEBUG(logger, "Joining thread " << thread.get_id());
+#endif
             thread.join();  //wait for all threads to finish
         }
     }

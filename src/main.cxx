@@ -648,9 +648,9 @@ namespace
                 catch (...)
                 {
                     g_ThreadMan.addException(std::current_exception());
-                    g_ThreadMan.end();
                 }
             }
+            g_ThreadMan.end();
             LOG4CXX_DEBUG(logger, "Exiting reader thread.");
         });
     }
@@ -674,6 +674,7 @@ namespace
                     const auto& inFrame = *ppFrame;
                     {
                         auto lock = inFrame.getReadLock();
+                        LOG4CXX_DEBUG(logger, "Waiting for incoming frame.");
                         inFrame.cv.wait(lock, [&inFrame, ts](){return g_ThreadMan.isEnded() || (inFrame->best_effort_timestamp > ts);});   //note that we assume the timebase of the incoming frames do not change
                         if (g_ThreadMan.isEnded())
                         {

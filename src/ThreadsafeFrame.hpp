@@ -11,7 +11,9 @@
 #include "LibAVWrappers.hpp"
 #include <shared_mutex>
 #include <condition_variable>
+#include <memory>
 
+struct SWSContect;
 namespace avtools
 {
     /// @class Thread-safe frame wrapper
@@ -22,7 +24,8 @@ namespace avtools
     /// Threads subscribe to this frame via subscribe(). When a new frame is available (After an update()),
     /// all subscribers are called with notify() to give them access to the underlying frame.
     /// Also see https://en.cppreference.com/w/cpp/thread/shared_mutex for single writer/multiple reader example
-    class ThreadsafeFrame: public avtools::Frame, std::enable_shared_from_this<ThreadsafeFrame>
+    class ThreadsafeFrame: 
+    public avtools::Frame, public std::enable_shared_from_this<ThreadsafeFrame>
     {
     private:
         SwsContext* pConvCtx_;                                              ///< Image conversion context used if the update images are different than the declared frame dimensions or format

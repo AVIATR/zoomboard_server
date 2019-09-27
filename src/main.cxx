@@ -138,6 +138,8 @@ int main(int argc, const char * argv[])
     std::signal( SIGINT, [](int){g_ThreadMan.end();} );
     std::cout << "press Ctrl+C to exit..." << std::endl;
 
+    try{
+
     // Set up logger. See https://logging.apache.org/log4cxx/latest_stable/usage.html for more info,
     //see https://logging.apache.org/log4cxx/latest_stable/apidocs/classlog4cxx_1_1_pattern_layout.html for patterns
     log4cxx::MDC::put("threadname", "main");    //add name of thread
@@ -265,6 +267,10 @@ int main(int argc, const char * argv[])
     const fs::path output = vm["output"].as<std::string>();
     if ( strequals(output.extension().string(), ".json") )
     {
+        if ( !fs::exists( output ) )
+        {
+            throw std::runtime_error("Could not find output configuration file " + output.string());
+        }
         LOG4CXX_INFO(logger, "Using output configuration file: " << output);
 
         std::map<std::string, Options> outputOpts = getOptions(output.string());
@@ -336,6 +342,15 @@ int main(int argc, const char * argv[])
     }
     LOG4CXX_DEBUG(logger, "Exiting successfully...");
     return EXIT_SUCCESS;
+
+    }
+    catch (std::exception& err)
+    {
+        LOG4CXX_ERROR(logger, "Exiting with errors...");
+        g_ThreadMan.end();
+        g_ThreadMan.addException(std::current_exception());
+        return EXIT_FAILURE;
+    }
 }
 
 namespace
@@ -492,7 +507,6 @@ namespace
 #else
                 std::for_each(filesToRemove.begin(), filesToRemove.end(), [](const fs::path& p){fs::remove(p);});
 #endif
-
             }
         }
     }

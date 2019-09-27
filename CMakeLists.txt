@@ -1,13 +1,6 @@
 # Set up the project
 cmake_minimum_required(VERSION 3.5.0)
-#SET(MACOSX_DEPLOYMENT_TARGET ${DARWIN_MAJOR_SDK_VERSION}.${DARWIN_MINOR_SDK_VERSION})
-#SET(CMAKE_CXX_FLAGS "--sysroot ${CMAKE_OSX_SYSROOT} ${CMAKE_CXX_FLAGS}")
-#MESSAGE("Setting MACOSX_DEPLOYMENT_TARGET to '${MACOSX_DEPLOYMENT_TARGET}'.")
-#set(CMAKE_OSX_DEPLOYMENT_TARGET "")
-#set(MACOSX_DEPLOYMENT_TARGET "")
-#set(CMAKE_OSX_SYSROOT "")
-#SET(CMAKE_CXX_FLAGS "--sysroot ${CMAKE_OSX_SYSROOT} ${CMAKE_CXX_FLAGS}")
-#MESSAGE("Setting MACOSX_DEPLOYMENT_TARGET to '${MACOSX_DEPLOYMENT_TARGET}'.")
+set(CMAKE_CXX_FLAGS "-Wl,-latomic") #workaround an issue with opencv
 if(DEFINED $ENV{PROJ_NAME})
     set(PROJ_NAME $ENV{PROJ_NAME})
 else()
@@ -55,6 +48,10 @@ endif()
 set(CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/cmake_modules" ${CMAKE_MODULE_PATH})
 message(STATUS "Module path set to: ${CMAKE_MODULE_PATH}")
 
+#Find Pthreads
+set(THREADS_PREFER_PTHREAD_FLAG ON)
+find_package(Threads REQUIRED)
+
 #Find Log4cxx
 find_package(LOG4CXX REQUIRED)
 if (LOG4CXX_FOUND)
@@ -80,7 +77,7 @@ if (Boost_FOUND)
 endif()
 
 # Find OpenCV
-find_package(OpenCV COMPONENTS core imgproc highgui aruco REQUIRED)
+find_package(OpenCV COMPONENTS core imgproc highgui aruco videoio REQUIRED)
 if (OpenCV_FOUND)
     message(STATUS "OpenCV Found")
     message(STATUS "OpenCV_LIBRARIES = ${OpenCV_LIBRARIES}")

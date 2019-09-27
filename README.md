@@ -7,6 +7,18 @@ This project depends on a few external open-source libraries:
 * [LibAV](https://www.libav.org/): These are used for opening the input stream and transcoding the video stream to the output formats.
 * [log4cxx](https://logging.apache.org/log4cxx/latest_stable/): Used for logging across threads
 
+### Installing dependencies on MacOS:
+To install the dependencies on MacOS using homebrew, just do
+`brew install ffmpeg ffmpeg-dev cmake opencv log4cxx boost`
+
+### Installing dependencies on Raspbian:
+To install the dependencies on Raspbian:
+`sudo apt-get install libavcodec-dev libavformat-dev libavfilter-dev \
+  libavdevice-dev libswscale-dev cmake liblog4cxx-dev \
+  libboost-dev libboost-program-options-dev libboost-filesystem-dev`
+  
+Unfortunately, the version of OpenCV that is in the repos does not come with Aruco. It is recommended that OpenCV be built from scratch. To do this, refer to the instructions [here](https://www.learnopencv.com/install-opencv-4-on-raspberry-pi/).
+
 ## Configuration file
 This json file provides the necessary configuration options (input device, resolution, frame rate, other ffmpeg options). as well as the output url and options. For details about the input device options, see the [ffmpeg faq about capture devices](https://trac.ffmpeg.org/wiki/Capture/Webcam).
 

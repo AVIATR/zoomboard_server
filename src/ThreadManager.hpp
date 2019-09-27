@@ -12,6 +12,7 @@
 #include <thread>
 #include <vector>
 #include <stdexcept>
+#include <atomic>
 
 /// @class Synchronization thread to signal end and capture exceptions from threads
 class ThreadManager

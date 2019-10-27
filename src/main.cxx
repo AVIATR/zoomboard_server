@@ -101,14 +101,7 @@ namespace
     /// @return a new thread that reads frames from the input frame and writes to an output file
     std::thread threadedWrite(std::weak_ptr<const avtools::ThreadsafeFrame> pFrame, avtools::MediaWriter& writer);
 
-    /// Launches a thread that creates a warped matrix of the input frame according to the given transform matrix
-    /// @param[in] pInFrame input frame
-    /// @param[in, out] pWarpedFrame transformed output frame
-    /// @param[in] trfMatrix transform matrix
-    /// @return a new thread that runs in the background, updates the warpedFrame when a new inFrame is available.
-    std::thread threadedWarp(std::weak_ptr<const avtools::ThreadsafeFrame> pInFrame, std::weak_ptr<avtools::ThreadsafeFrame> pWarpedFrame, const cv::Mat& trfMatrix);
-
-    /// Callback function for libav log messages - used to direct them to the logger
+/// Callback function for libav log messages - used to direct them to the logger
     /// @see av_log_default_callback, https://github.com/FFmpeg/FFmpeg/blob/n4.1.3/libavutil/log.c
     /// @param[in] p ptr to a struct of which the first field is a pointer to an AVClass struct.
     /// @param[in] level message log level
@@ -127,11 +120,6 @@ namespace
 /// Maintains communication between threads re: exceptions & program end
 ThreadManager g_ThreadMan;
 
-// The command we are trying to implement for one output stream is
-// sudo avconv -f video4linux2 -r 5 -s hd1080 -i /dev/video0 \
-//  -vf "format=yuv420p,framerate=5" -c:v libx264 -profile:v:0 high -level 3.0 -flags +cgop -g 1 \
-//  -hls_time 0.1 -hls_allow_cache 0 -an -preset ultrafast /mnt/hls/stream.m3u8
-// For further help, see https://libav.org/avconv.html
 int main(int argc, const char * argv[])
 {
     // Set up signal handler to end program
@@ -164,8 +152,7 @@ int main(int argc, const char * argv[])
     ("help,h", "produce help message")
     ("version,v", "program version")
     ("yes,y", "answer 'yes' to every prompt")
-    ("adjust,a", "adjust perspective")
-    ("calibration_file,c", bpo::value<std::string>(), "calibration file to use if using aruco markers, created by calibrate_camera. If none is provided, and the adjust option is also passed, then a window is provided for the user to click on the corners of the board.")
+    ("calibration_file,c", bpo::value<std::string>(), "calibration file to use if using aruco markers, created by calibrate_camera. If one is provided, it is used to search for Aruco markers to use for perspective correction.")
     ("output,o", bpo::value<std::string>()->default_value("output.json"), "output file or configuration file")
     ("input,i", bpo::value<std::string>()->default_value("input.json"), "input file or configuration file.")
 #ifndef NDEBUG
@@ -291,43 +278,28 @@ int main(int argc, const char * argv[])
     }
 
     // Start writing (and correct perspective if requested)
-    cv::Mat trfMatrix;
+//    cv::Mat trfMatrix;
     auto pTrfFrame = avtools::ThreadsafeFrame::Get(pVidStr->codecpar->width, pVidStr->codecpar->height, PIX_FMT, pVidStr->time_base);
-    if (vm.count("adjust") > 0) //perspective adjustment requested
+    if (vm.count("calibration_file"))
     {
-        // Get corners of the board
-        if (vm.count("calibration_file"))
-        {
-            LOG4CXX_DEBUG(logger, "Calibration file found, will use Aruco markers for perspective adjustment.");
-            trfMatrix = getPerspectiveTransformationMatrixFromMarkers(pInFrame, vm["calibration_file"].as<std::string>());
-        }
-        else
-        {
-            LOG4CXX_DEBUG(logger, "Please click on the four corners of the board for perspective adjustment.");
-            trfMatrix = getPerspectiveTransformationMatrixFromUser(pInFrame);
-        }
-    }
-    if (trfMatrix.empty())
-    {
-        if (vm.count("adjust") > 0)
-        {
-            LOG4CXX_WARN(logger, "Unable to detect perspective, continuing without perspective adjustment.");
-        }
-        // add writers to writer input frames
-        for (auto &writer : writers)
-        {
-            g_ThreadMan.addThread( threadedWrite(pInFrame, writer) );
-        }
-    }
-    else  // Start the warper thread
-    {
-        LOG4CXX_DEBUG(logger, "Will apply perspective transform using transformation matrix: " << trfMatrix);
+        LOG4CXX_INFO(logger, "Calibration file found, will use Aruco markers for perspective adjustment.");
+//        trfMatrix = getPerspectiveTransformationMatrix(pInFrame, vm["calibration_file"].as<std::string>());
         assert( (AV_NOPTS_VALUE == (*pTrfFrame)->best_effort_timestamp) && (AV_NOPTS_VALUE == (*pTrfFrame)->pts) );
-        g_ThreadMan.addThread( threadedWarp(pInFrame, pTrfFrame, trfMatrix) );
+//        g_ThreadMan.addThread( threadedWarp(pInFrame, pTrfFrame, trfMatrix) );
+        g_ThreadMan.addThread( threadedWarp(pInFrame, pTrfFrame, vm["calibration_file"].as<std::string>()) );
         // add writers to writer perspective transformed frames
         for (auto &writer : writers)
         {
             g_ThreadMan.addThread( threadedWrite(pTrfFrame, writer) );
+        }
+    }
+    else
+    {
+        LOG4CXX_INFO(logger, "No calibration file provided, continuing without perspective adjustment.");
+        // add writers to writer input frames
+        for (auto &writer : writers)
+        {
+            g_ThreadMan.addThread( threadedWrite(pInFrame, writer) );
         }
     }
 
@@ -717,76 +689,6 @@ namespace
             }
             //Cleanup writer
             LOG4CXX_DEBUG(logger, "Exiting writer thread");
-        });
-    }
-
-    std::thread threadedWarp(std::weak_ptr<const avtools::ThreadsafeFrame> pInFrame, std::weak_ptr<avtools::ThreadsafeFrame> pWarpedFrame, const cv::Mat& trfMatrix)
-    {
-        return std::thread([pInFrame, pWarpedFrame, trfMatrix](){
-            try
-            {
-                log4cxx::MDC::put("threadname", "warper");
-                avtools::TimeType ts = AV_NOPTS_VALUE;
-                while (!g_ThreadMan.isEnded())
-                {
-                    auto ppInFrame = pInFrame.lock();
-                    if (!ppInFrame)
-                    {
-                        if (g_ThreadMan.isEnded())
-                        {
-                            break;
-                        }
-                        throw std::runtime_error("Warper received null frame.");
-                    }
-                    const auto& inFrame = *ppInFrame;
-                    {
-                        auto rLock = inFrame.getReadLock();
-                        inFrame.cv.wait(rLock, [&inFrame, ts](){return g_ThreadMan.isEnded() ||  (inFrame->best_effort_timestamp > ts);});    //wait until fresh frame is available
-                        if (g_ThreadMan.isEnded())
-                        {
-                            break;
-                        }
-                        ts = inFrame->best_effort_timestamp;
-                        auto ppWarpedFrame = pWarpedFrame.lock();
-                        if (!ppWarpedFrame )
-                        {
-                            throw std::runtime_error("Warper output frame is null");
-                        }
-                        auto& warpedFrame = *ppWarpedFrame;
-                        {
-                            auto wLock = warpedFrame.getWriteLock();
-                            assert(warpedFrame->best_effort_timestamp < ts);
-                            assert( (av_cmp_q(warpedFrame.timebase, inFrame.timebase) == 0) && (warpedFrame.type == AVMediaType::AVMEDIA_TYPE_VIDEO) && (inFrame.type == AVMediaType::AVMEDIA_TYPE_VIDEO) );
-                            cv::Mat inImg = getImage(inFrame);  //should we instead copy this data to this thread?
-                            cv::Mat outImg = getImage(warpedFrame);
-                            LOG4CXX_DEBUG(logger, "Warper using transformation matrix: " << trfMatrix );
-                            LOG4CXX_DEBUG(logger, "output image data is at: " << (void*) outImg.data );
-                            cv::warpPerspective(inImg, outImg, trfMatrix, outImg.size(), cv::InterpolationFlags::INTER_LANCZOS4);
-                            int ret = av_frame_copy_props(warpedFrame.get(), inFrame.get());
-                            if (ret < 0)
-                            {
-                                throw avtools::MediaError("Unable to copy frame properties", ret);
-                            }
-                            LOG4CXX_DEBUG(logger, "Warped frame info: \n" << warpedFrame.info(1));
-                        }
-                        warpedFrame.cv.notify_all();
-                    }
-                }
-            }
-            catch (std::exception& err)
-            {
-                LOG4CXX_DEBUG(logger, "Caught exception in warper thread" << err.what());
-                try
-                {
-                    std::throw_with_nested( std::runtime_error("Warper thread error") );
-                }
-                catch (...)
-                {
-                    g_ThreadMan.addException(std::current_exception());
-                    g_ThreadMan.end();
-                }
-            }
-            LOG4CXX_DEBUG(logger, "Exiting warper thread: isEnded=" << std::boolalpha << g_ThreadMan.isEnded());
         });
     }
 

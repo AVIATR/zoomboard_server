@@ -1,6 +1,5 @@
 # Set up the project
 cmake_minimum_required(VERSION 3.5.0)
-set(CMAKE_CXX_FLAGS "-Wl,-latomic") #workaround an issue with opencv
 if(DEFINED $ENV{PROJ_NAME})
     set(PROJ_NAME $ENV{PROJ_NAME})
 else()
@@ -94,8 +93,14 @@ message(STATUS "BINARY DIR = ${PROJECT_BINARY_DIR}")
 #Add source folder
 add_subdirectory("src")
 message(STATUS "Target folder = ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}")
-configure_file(input.json "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/input.json" COPYONLY)
-configure_file(output.json "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/output.json" COPYONLY)
+if (${CMAKE_SYSTEM_NAME} STREQUAL "Darwin") #Macos
+    configure_file(macos/input.json "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/input.json" COPYONLY)
+    configure_file(macos/output.json "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/output.json" COPYONLY)
+elseif (${CMAKE_SYSTEM_NAME} STREQUAL "Linux") #Linux
+    set(CMAKE_CXX_FLAGS "-Wl,-latomic") #workaround an issue with opencv on rpi
+    configure_file(linux/input.json "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/input.json" COPYONLY)
+    configure_file(linux/output.json "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/output.json" COPYONLY)
+endif()    
 
 # CPack packaging
 include(InstallRequiredSystemLibraries)

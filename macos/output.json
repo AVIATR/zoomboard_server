@@ -1,0 +1,66 @@
+{
+    "stream_lr.m3u8": 
+    {
+        "muxer_options":
+        {
+            "framerate": "15/1",
+            "strict": "normal",
+            "hls_time": "0.1",
+            "hls_allow_cache": "0",
+            "hls_flags": "+temp_file+delete_segments",
+            "hls_list_size": "10",
+            "hls_delete_threshold": "1"
+        },
+        "codec_options": 
+        {
+            "name": "h264",
+            "video_size": "384x216",
+            "pixel_format": "yuv422p",
+            "b" : "256000",
+            "crf": "23",
+            "qmin": "2",
+            "qmax": "69",
+            "qdiff": "4",
+            "flags": "+cgop+low_delay+qscale",
+            "g": "4",
+            "me_range": "16",
+            "strict": "normal",
+            "level": "5.0",
+            "profile": "high422",
+            "preset": "ultrafast",
+            "tune": "zerolatency"
+        }
+    },
+    "stream_hr.m3u8":
+    {
+        "muxer_options":
+        {
+            "framerate": "1/1",
+            "strict": "normal",
+            "hls_time": "1.0",
+            "hls_allow_cache": "0",
+            "hls_flags": "+temp_file+delete_segments",
+            "hls_list_size": "3",
+            "hls_delete_threshold": "1"
+        },
+        "codec_options": 
+        {
+            "name": "h264",
+            "video_size": "848x480",
+            "pixel_format": "yuv422p",
+            "b" : "128000",
+            "crf": "23",
+            "qmin": "2",
+            "qmax": "51",
+            "qdiff": "4",
+            "flags": "+cgop+low_delay+qscale",
+            "g": "4",
+            "me_range": "16",
+            "strict": "normal",
+            "level": "5.0",
+            "profile": "high422",
+            "preset": "ultrafast",
+            "tune": "zerolatency"
+        }
+    }
+}

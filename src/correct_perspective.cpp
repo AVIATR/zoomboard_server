@@ -8,7 +8,9 @@
 #include "correct_perspective.hpp"
 #include <vector>
 #include <log4cxx/logger.h>
+#ifndef NDEBUG
 #include <opencv2/highgui.hpp>
+#endif
 #include "opencv2/imgproc.hpp"
 #include "opencv2/aruco.hpp"
 #include "libav2opencv.hpp"
@@ -19,7 +21,8 @@ extern ThreadManager g_ThreadMan;
 namespace
 {
     static const std::string INPUT_WINDOW_NAME = "Input", OUTPUT_WINDOW_NAME = "Warped";
-    static const cv::Scalar FIXED_COLOR = cv::Scalar(0,0,255), DRAGGED_COLOR = cv::Scalar(255, 0, 0);
+    static const cv::Scalar BORDER_COLOR = cv::Scalar(0,0,255);
+    static constexpr float MAX_MARKER_MOVEMENT = 25.f;
 
     // Initialize logger
     log4cxx::LoggerPtr logger(log4cxx::Logger::getLogger("zoombrd.perspective"));
@@ -36,7 +39,7 @@ namespace
     /// @param[in] imSize size of the input images (where the corners belong)
     /// @return the estimated aspect ratio
     /// @throw runtime_error if the corners do not have sufficient separation to calculate the aspect ratio
-    float getAspectRatio(std::vector<cv::Point2f>& corners, const cv::Size& imSize)
+    float getAspectRatio(const std::vector<cv::Point2f>& corners, const cv::Size& imSize)
     {
         // We will assume that corners contains the corners in the order top-left, top-right, bottom-right, bottom-left
         assert(corners.size() == 4);
@@ -77,81 +80,7 @@ namespace
         }
     }
 
-    class UserDirectedBoardFinder
-    {
-    private:
-        int draggedPt_;                      ///< index of the point currently being dragged. -1 if none
-        std::vector<cv::Point2f> corners_;   ///< Currently selected coordinates of the corners
-
-        /// Mouse callback for the window, replacing cv::MouseCallback
-        static void OnMouse(int event, int x, int y, int flags, void *userdata)
-        {
-            UserDirectedBoardFinder* pC = static_cast<UserDirectedBoardFinder*>(userdata);
-            assert(pC->draggedPt_ < (int) pC->corners_.size());
-            cv::Point2f curPt(x,y);
-            switch(event)
-            {
-                case cv::MouseEventTypes::EVENT_LBUTTONDOWN:
-                    //See if we are near any existing markers
-                    assert(pC->draggedPt_ < 0);
-                    for (int i = 0; i < pC->corners_.size(); ++i)
-                    {
-                        if (cv::norm(curPt - pC->corners_[i]) < 10.f)
-                        {
-                            pC->draggedPt_ = i;  //start dragging
-                            break;
-                        }
-                    }
-                    break;
-                case cv::MouseEventTypes::EVENT_MOUSEMOVE:
-                    if ((flags & cv::MouseEventFlags::EVENT_FLAG_LBUTTON) && (pC->draggedPt_ >= 0))
-                    {
-                        pC->corners_[pC->draggedPt_] = curPt;
-                    }
-                    break;
-                case cv::MouseEventTypes::EVENT_LBUTTONUP:
-                    if (pC->draggedPt_ >= 0)
-                    {
-                        pC->corners_[pC->draggedPt_] = curPt;
-                        pC->draggedPt_ = -1; //end dragging
-                    }
-                    else if (pC->corners_.size() < 4)
-                    {
-                        pC->corners_.emplace_back(x,y);
-                    }
-                    break;
-                default:
-                    break;
-            }
-            LOG4CXX_DEBUG(logger, "Marked " << pC->corners_.size() << " points.");
-        }
-    public:
-
-        /// Ctor
-        UserDirectedBoardFinder():
-        draggedPt_(-1)
-        {
-            cv::setMouseCallback(INPUT_WINDOW_NAME, OnMouse, this);
-        }
-
-        std::vector<cv::Point2f> getCorners(const cv::Mat& img)
-        {
-            return corners_;
-        }
-
-        void draw(cv::Mat& img)
-        {
-            for (int i = 0; i < corners_.size(); ++i)
-            {
-                auto color = (draggedPt_ == i ? DRAGGED_COLOR : FIXED_COLOR);
-                cv::drawMarker(img, corners_[i], color, cv::MarkerTypes::MARKER_SQUARE, 5);
-                cv::putText(img, std::to_string(i+1), corners_[i], cv::FONT_HERSHEY_SIMPLEX, 0.5, color);
-            }
-        }
-
-    };  // UserDirectedBoardFinder
-
-    class MarkerDirectedBoardFinder
+    class BoardFinder
     {
     private:
         std::vector< std::vector<cv::Point2f> > corners_;   ///< detected corners of the markers
@@ -160,22 +89,9 @@ namespace
         cv::Mat distCoeffs_;                                ///< distortion coefficients
         cv::Ptr<cv::aruco::Dictionary> pDict_;              ///< pointer to the dictionary of aruco markers
 
-        std::vector<cv::Point2f> getOuterCorners() const
-        {
-            std::vector<cv::Point2f> outerCorners(4);
-            assert(4 == corners_.size());
-            assert(4 == ids_.size());
-            for (int i = 0; i < 4; ++i)
-            {
-                int c = ids_[i] < 2 ? ids_[i] : 5-ids_[i];
-                outerCorners[c]= (corners_[i][c]);
-            }
-//            std::swap(outerCorners[2], outerCorners[3]);
-            return outerCorners;
-        }
     public:
 
-        MarkerDirectedBoardFinder(const std::string& calibrationFile):
+        BoardFinder(const std::string& calibrationFile):
         pDict_(nullptr)
         {
             corners_.reserve(16);
@@ -213,7 +129,13 @@ namespace
             pDict_ = cv::makePtr<cv::aruco::Dictionary>(markers, markerSz);
         }
 
-        std::vector<cv::Point2f> getCorners(const cv::Mat& img)
+        /// Finds and returns the corners of the aruco markers seen in the image
+        /// @param[in] img input image to search for markers
+        /// @return a vector of markers
+        /// There should be 4 markers, and the returned vector _corners_ is always of size 4
+        /// The markers are sorted such that _corners_[i] always corresponds to the i'th marker.
+        /// If a marker i is not visible, than _corners_[i] is empty.
+        std::vector< std::vector<cv::Point2f> > getCorners(const cv::Mat& img)
         {
             //Find markers
             corners_.clear();
@@ -224,169 +146,226 @@ namespace
                                      cameraMatrix_.empty() ? cv::noArray() : cameraMatrix_,
                                      distCoeffs_.empty() ? cv::noArray() : distCoeffs_
                                      );
-            int n = (int) ids_.size();
-            assert( corners_.size() == n );
-            if (n != 4)
+
+            /// Sort markers
+            std::vector< std::vector<cv::Point2f> > sortedCorners(4);
+            int nMarkersFound = (int) corners_.size();
+            assert(nMarkersFound == ids_.size());
+            for (int n = 0; n < nMarkersFound; ++n)
             {
-                LOG4CXX_INFO(logger, "Cannot see four markers");
-                return std::vector<cv::Point2f>();
+                sortedCorners[ids_[n]] = corners_[n];
             }
-
-            return getOuterCorners();
+            return sortedCorners;
         }
+    };  // BoardFinder
 
-        void draw(cv::Mat& img)
-        {
-            const int nCorners = (int) corners_.size();
-            auto color = (nCorners < 4 ? DRAGGED_COLOR : FIXED_COLOR);
-            cv::aruco::drawDetectedMarkers(img, corners_, ids_, color);
-            if (nCorners == 4)
-            {
-                auto outerCorners = getOuterCorners();
-                assert(outerCorners.size() == nCorners);
-                for (int i = 0; i < 4; ++i)
-                {
-                    cv::drawMarker(img, outerCorners[i], DRAGGED_COLOR, cv::MarkerTypes::MARKER_STAR, 10);
-                }
-//#ifndef NDEBUG
-//                static int nFrame =0;
-//                cv::imwrite("marker_img" + std::to_string(nFrame++) + ".jpg", img);
-//#endif
-            }
-        }
-    };  // MarkerDirectedBoardFinder
-}
-
-template<class T>
-cv::Mat_<double> getPerspectiveTransformationMatrix(std::weak_ptr<const avtools::ThreadsafeFrame> pFrame, T boardFinder)
-{
-    cv::startWindowThread();
-    cv::Mat_<double> trfMatrix;
-    cv::Mat inputImg, warpedImg;
-    std::vector<cv::Point2f> TGT_CORNERS;
-    avtools::Frame intermediateFrame;
-    cv::namedWindow(OUTPUT_WINDOW_NAME);
-
-    //Initialize
+    /// Returns the relevant outer corners of the markers.
+    /// @param[in] corners detected marker corners
+    /// Assumes that the markers are ordered in terms of id (i.e., corners[i] are the corners for marker with id i).
+    /// @return the outermost corners of the markers, corresponding to the boundaries of the area to rectify
+    std::vector<cv::Point2f> getOuterCorners(const std::vector< std::vector<cv::Point2f> >& corners)
     {
-        auto ppFrame = pFrame.lock();
-        if (!ppFrame)
+        std::vector<cv::Point2f> outerCorners(4);
+        assert(4 == corners.size());
+        for (int i = 0; i < 4; ++i)
         {
-            throw std::runtime_error("Invalid frame provided to calculate perspective transform");
+            if (corners[i].empty()) //this marker was not found
+            {
+                return std::vector<cv::Point2f>();  //return empty matrix
+            }
+            int c = i < 2 ? i : 5-i;
+            outerCorners[c]= (corners[i][c]);
         }
-        auto lock = ppFrame->getReadLock();
-        intermediateFrame = ppFrame->clone();
-        warpedImg = cv::Mat((*ppFrame)->height, (*ppFrame)->width, CV_8UC3);
+        assert(outerCorners.size() == 4);
+        return outerCorners;
     }
-    //Start the loop
-    std::vector<cv::Point2f> corners;
-    while ( !g_ThreadMan.isEnded() && (cv::waitKey(20) < 0) )    //wait for key press
-    {
-        auto ppFrame = pFrame.lock();
-        if (!ppFrame)
-        {
-            break;
-        }
-        cv::Rect2f roi(cv::Point2f(), warpedImg.size());
-        // See if a new input image is available, and copy to intermediate frame if so
-        {
-            auto lock = ppFrame->tryReadLock(); //non-blocking attempt to lock
-            assert((*ppFrame)->format == PIX_FMT);
-            if ( lock && ((*ppFrame)->best_effort_timestamp != AV_NOPTS_VALUE) )
-            {
-                LOG4CXX_DEBUG(logger, "Transformer received frame with pts: " << (*ppFrame)->best_effort_timestamp);
-            }
-            ppFrame->clone(intermediateFrame);
-        }
-        // Display intermediateFrame and warpedFrame if four corners have been chosen
-        inputImg = getImage(intermediateFrame);
-        if (inputImg.total() > 0)
-        {
-            const float IMG_ASPECT = (float) inputImg.cols / (float) inputImg.rows;
-            corners = boardFinder.getCorners(inputImg);
-            int nCorners = (int) corners.size();
-            LOG4CXX_DEBUG(logger, "Detected " << nCorners << " corners.");
-            if (nCorners == 4)
-            {
-                //Calculate aspect ratio:
-                float aspect = getAspectRatio(corners, inputImg.size());
-                LOG4CXX_DEBUG(logger, "Calculated aspect ratio is: " << aspect);
-                if (aspect > IMG_ASPECT)
-                {
-                    assert(roi.width == (float) warpedImg.cols);
-                    assert(roi.x == 0.f);
-                    roi.height = (float) warpedImg.cols / aspect;
-                    roi.y = (warpedImg.rows - roi.height) / 2.f;
-                    assert(roi.y >= 0.f);
-                }
-                else
-                {
-                    assert(roi.height == (float) warpedImg.rows);
-                    assert(roi.y == 0.f);
-                    roi.width = (float) warpedImg.rows * aspect;
-                    roi.x = (warpedImg.cols - roi.width) / 2.f;
-                    assert(roi.x >= 0.f);
-                }
-                TGT_CORNERS = {roi.tl(), cv::Point2f(roi.x + roi.width, roi.y), roi.br(), cv::Point2f(roi.x, roi.y + roi.height)};
 
-                trfMatrix = cv::getPerspectiveTransform(corners, TGT_CORNERS);
-
-#ifndef NDEBUG
-                LOG4CXX_DEBUG(logger, "Need to transform \n" << corners << " to \n" << TGT_CORNERS);
-                auto warpPt = [](const cv::Point2f& pt, cv::Mat_<float> trfMat)
-                {
-                    float scaleFactor = trfMat[2][0] * pt.x + trfMat[2][1] * pt.y + trfMat[2][2];
-                    return cv::Point2f(
-                                       (trfMat[0][0] * pt.x + trfMat[0][1] * pt.y + trfMat[0][2]) / scaleFactor,
-                                       (trfMat[1][0] * pt.x + trfMat[1][1] * pt.y + trfMat[1][2]) / scaleFactor
-                                       );
-                };
-                LOG4CXX_DEBUG(logger, "Calculated matrix \n" << trfMatrix << " will transform "
-                              << corners[0] << " -> " << warpPt(corners[0], trfMatrix) << ", "
-                              << corners[1] << " -> " << warpPt(corners[1], trfMatrix) << ","
-                              << corners[2] << " -> " << warpPt(corners[2], trfMatrix) << ","
-                              << corners[3] << " -> " << warpPt(corners[3], trfMatrix) << "."
-                              );
-#endif
-                warpedImg = 0;
-                cv::warpPerspective(inputImg, warpedImg, trfMatrix, warpedImg.size(), cv::InterpolationFlags::INTER_LINEAR);
-                cv::imshow(OUTPUT_WINDOW_NAME, warpedImg);
-                for (int i = 0; i < 4; ++i)
-                {
-                    cv::line(inputImg, corners[i], corners[(i+1) % 4], FIXED_COLOR);
-                }
-            }
-            boardFinder.draw(inputImg);
-            cv::imshow(INPUT_WINDOW_NAME, inputImg);
-        }
-    }
-    if (!g_ThreadMan.isEnded())
+    /// Uses Aruco markers on the four corners of the board to calculate the  perspective transform.
+    /// This can then be used with cv::warpPerspective to correct the perspective of the video.
+    /// also @see https://docs.opencv.org/3.1.0/da/d54/group__imgproc__transform.html
+    /// @param[in] pFrame input frame that will be updated by the reader thread
+    /// @param[in] calibrationFile calibration file that contains info re: camera calibration and aruco markers
+    /// @return a perspective transformation matrix
+    cv::Mat_<double> getPerspectiveTransformationMatrix(const std::vector<cv::Point2f>& corners, const cv::Size& imgSize)
     {
-        if (corners.size() == 4)
+        cv::Mat_<double> trfMatrix;
+        std::vector<cv::Point2f> targetCorners;
+        assert(imgSize.height > 0);
+        const float IMG_ASPECT = (float) imgSize.width / (float) imgSize.height;
+        assert( 4 == corners.size() );
+        //Calculate aspect ratio:
+        float aspect = getAspectRatio(corners, imgSize);
+        LOG4CXX_DEBUG(logger, "Calculated aspect ratio is: " << aspect);
+        assert(aspect > 0.f);
+        if (aspect > IMG_ASPECT)
         {
-            assert(trfMatrix.total() > 0);
-            LOG4CXX_DEBUG(logger, "Current perspective transform is :" << trfMatrix);
+            float h = (float) imgSize.width / aspect;
+            targetCorners = {
+                cv::Point2f(0.f,            0.5f * (imgSize.height - h)),
+                cv::Point2f(imgSize.width,  0.5f * (imgSize.height - h)),
+                cv::Point2f(imgSize.width,  0.5f * (imgSize.height + h)),
+                cv::Point2f(0.f,            0.5f * (imgSize.height + h))
+            };
         }
         else
         {
-            LOG4CXX_ERROR(logger, "Perspective transform requires 4 points, given only " << corners.size());
-            trfMatrix = cv::Mat();
+            float w = (float) imgSize.height * aspect;
+            targetCorners = {
+                cv::Point2f(0.5f * (imgSize.width - w), 0.f),
+                cv::Point2f(0.5f * (imgSize.width + w), 0.f),
+                cv::Point2f(0.5f * (imgSize.width + w), imgSize.height),
+                cv::Point2f(0.5f * (imgSize.width - w), imgSize.height)
+            };
+        }
+
+        trfMatrix = cv::getPerspectiveTransform(corners, targetCorners);
+
+#ifndef NDEBUG
+        LOG4CXX_DEBUG(logger, "Need to transform \n" << corners << " to \n" << targetCorners);
+        auto warpPt = [](const cv::Point2f& pt, cv::Mat_<float> trfMat)
+        {
+            float scaleFactor = trfMat[2][0] * pt.x + trfMat[2][1] * pt.y + trfMat[2][2];
+            return cv::Point2f(
+                               (trfMat[0][0] * pt.x + trfMat[0][1] * pt.y + trfMat[0][2]) / scaleFactor,
+                               (trfMat[1][0] * pt.x + trfMat[1][1] * pt.y + trfMat[1][2]) / scaleFactor
+                               );
+        };
+        LOG4CXX_DEBUG(logger, "Calculated matrix \n" << trfMatrix << " will transform "
+                      << corners[0] << " -> " << warpPt(corners[0], trfMatrix) << ", "
+                      << corners[1] << " -> " << warpPt(corners[1], trfMatrix) << ","
+                      << corners[2] << " -> " << warpPt(corners[2], trfMatrix) << ","
+                      << corners[3] << " -> " << warpPt(corners[3], trfMatrix) << "."
+                      );
+#endif
+        return trfMatrix;
+    }
+
+    float calculateMarkerMovement(const std::vector< std::vector<cv::Point2f> >& prevCorners, const std::vector< std::vector<cv::Point2f> >& corners)
+    {
+        float motion = 0.f;
+        assert( (prevCorners.size() == 4) && (corners.size() == 4) );
+        int nMarkers = 0;
+        for (int i = 0; i < 4; ++i)
+        {
+            if (!prevCorners[i].empty() && !corners[i].empty())
+            {
+                ++nMarkers;
+                assert ((prevCorners[i].size() == 4) && (corners[i].size() == 4));
+                for (int j = 0; j < 4; ++j)
+                {
+                    motion += 0.25f * (cv::norm(corners[i][j] - prevCorners[i][j]));
+                }
+            }
+        }
+        if (nMarkers > 0)
+        {
+            return motion / nMarkers; //normalize motion per matching point
+        }
+        else
+        {
+            return FLT_MAX;
         }
     }
-    cv::setMouseCallback(INPUT_WINDOW_NAME, nullptr, nullptr);
-    cv::destroyAllWindows();
-    cv::waitKey(10);
-    return trfMatrix;
-}
+} //::<anon>
 
-cv::Mat_<double> getPerspectiveTransformationMatrixFromUser(std::weak_ptr<const avtools::ThreadsafeFrame> pFrame)
-{
-    cv::namedWindow(INPUT_WINDOW_NAME);
-    return getPerspectiveTransformationMatrix(pFrame, UserDirectedBoardFinder());
-}
 
-cv::Mat_<double> getPerspectiveTransformationMatrixFromMarkers(std::weak_ptr<const avtools::ThreadsafeFrame> pFrame, const std::string& calibrationFile)
+std::thread threadedWarp(std::weak_ptr<const avtools::ThreadsafeFrame> pInFrame, std::weak_ptr<avtools::ThreadsafeFrame> pWarpedFrame, const std::string& calibrationFile)
 {
-    cv::namedWindow(INPUT_WINDOW_NAME);
-    return getPerspectiveTransformationMatrix(pFrame, MarkerDirectedBoardFinder(calibrationFile));
+    return std::thread([pInFrame, pWarpedFrame, calibrationFile](){
+        try
+        {
+            log4cxx::MDC::put("threadname", "warper");
+            // Read board information & create board finder
+            BoardFinder boardFinder(calibrationFile);
+            std::vector< std::vector<cv::Point2f> > prevCorners(4);    //previously detected marker corners
+            cv::Mat_<double> trfMatrix; //perspective transform matrix
+            // Start the loop - every frame gets checked for markers
+            // If all markers are visible, a new perspective transform is calculated.
+            // If not all markers are visible, but the detected ones are in approximately the same location as before, then the previously calculated transform is used.
+            // If the detected markers are in different locations than before, then no transform is applied
+            avtools::TimeType ts = AV_NOPTS_VALUE;
+            while (!g_ThreadMan.isEnded())
+            {
+                auto ppInFrame = pInFrame.lock();
+                if (!ppInFrame)
+                {
+                    if (g_ThreadMan.isEnded())
+                    {
+                        break;
+                    }
+                    throw std::runtime_error("Warper received null frame.");
+                }
+                const auto& inFrame = *ppInFrame;
+                {
+                    auto rLock = inFrame.getReadLock();
+                    inFrame.cv.wait(rLock, [&inFrame, ts](){return g_ThreadMan.isEnded() ||  (inFrame->best_effort_timestamp > ts);});    //wait until fresh frame is available
+                    if (g_ThreadMan.isEnded())  //if the wait ended because program ended, quit
+                    {
+                        break;
+                    }
+                    ts = inFrame->best_effort_timestamp;
+                    auto ppWarpedFrame = pWarpedFrame.lock();
+                    if (!ppWarpedFrame )
+                    {
+                        throw std::runtime_error("Warper output frame is null");
+                    }
+                    auto& warpedFrame = *ppWarpedFrame;
+                    {
+                        auto wLock = warpedFrame.getWriteLock();
+                        assert(warpedFrame->best_effort_timestamp < ts);
+                        assert( (av_cmp_q(warpedFrame.timebase, inFrame.timebase) == 0) && (warpedFrame.type == AVMediaType::AVMEDIA_TYPE_VIDEO) && (inFrame.type == AVMediaType::AVMEDIA_TYPE_VIDEO) );
+                        cv::Mat inImg = getImage(inFrame);
+                        //Look for markers in this frame
+                        auto corners = boardFinder.getCorners(inImg);
+                        // See if corners have moved since last time
+                        if (calculateMarkerMovement(prevCorners, corners) > MAX_MARKER_MOVEMENT)
+                        {
+                            auto boundary = getOuterCorners(corners);
+                            if (boundary.empty())   // do not have all markers visible to calculate trf matrix
+                            {
+                                trfMatrix = cv::Mat_<double>();
+                            }
+                            else
+                            {
+                                trfMatrix = getPerspectiveTransformationMatrix(boundary, inImg.size());
+                                prevCorners = corners;
+                            }
+                        }
+
+                        cv::Mat outImg = getImage(warpedFrame);
+                        if (trfMatrix.empty())
+                        {
+                            inImg.copyTo(outImg);
+                        }
+                        else
+                        {
+                            LOG4CXX_DEBUG(logger, "Warper using transformation matrix: " << trfMatrix );
+                            cv::warpPerspective(inImg, outImg, trfMatrix, outImg.size(), cv::InterpolationFlags::INTER_LANCZOS4);
+                        }
+                        int ret = av_frame_copy_props(warpedFrame.get(), inFrame.get());
+                        if (ret < 0)
+                        {
+                            throw avtools::MediaError("Unable to copy frame properties", ret);
+                        }
+                        LOG4CXX_DEBUG(logger, "Warped frame info: \n" << warpedFrame.info(1));
+                    }
+                    warpedFrame.cv.notify_all();
+                }
+            }
+        }
+        catch (std::exception& err)
+        {
+            LOG4CXX_DEBUG(logger, "Caught exception in warper thread" << err.what());
+            try
+            {
+                std::throw_with_nested( std::runtime_error("Warper thread error") );
+            }
+            catch (...)
+            {
+                g_ThreadMan.addException(std::current_exception());
+                g_ThreadMan.end();
+            }
+        }
+        LOG4CXX_DEBUG(logger, "Exiting warper thread: isEnded=" << std::boolalpha << g_ThreadMan.isEnded());
+    });
 }

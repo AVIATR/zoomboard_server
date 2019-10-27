@@ -1,0 +1,16 @@
+{
+    "0":
+    {
+        "muxer_options":
+        {
+            "name" : "l4v2",
+            "framerate": "30/1",
+            "video_size": "1920x1080",
+            "pixel_format": "rgb24"
+        },
+        "codec_options":
+        {
+            "skip_frame": "1"
+        }
+    }
+}

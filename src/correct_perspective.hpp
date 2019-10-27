@@ -11,25 +11,13 @@
 #include "ThreadsafeFrame.hpp"
 #include <memory>
 #include <string>
-#include <opencv2/core.hpp>
+#include <thread>
 
-/// Uses Aruco markers on the four corners of the board to undo perspective transform.
-/// This can then be used with cv::warpPerspective to correct the perspective of the video.
-/// also @see https://docs.opencv.org/3.1.0/da/d54/group__imgproc__transform.html
-/// @param[in] pFrame input frame that will be updated by the reader thread
-/// @param[in] calibrationFile calibration file that contains info re: camera calibration and aruco markers
-/// @return a perspective transformation matrix
-/// TODO: Should also return the roi so we send a smaller framesize if need be (no need to send extra data)
-cv::Mat_<double> getPerspectiveTransformationMatrixFromMarkers(std::weak_ptr<const avtools::ThreadsafeFrame> pFrame, const std::string& calibrationFile);
-
-/// Asks the user to choose the corners of the board and undoes the
-/// perspective transform. This can then be used with
-/// cv::warpPerspective to correct the perspective of the video.
-/// also @see https://docs.opencv.org/3.1.0/da/d54/group__imgproc__transform.html
-/// @param[in] pFrame input frame that will be updated by the reader thread
-/// @return a perspective transformation matrix
-/// TODO: Should also return the roi so we send a smaller framesize if need be (no need to send extra data)
-cv::Mat_<double> getPerspectiveTransformationMatrixFromUser(std::weak_ptr<const avtools::ThreadsafeFrame> pFrame);
-
+/// Launches a thread that creates a warped matrix of the input frame according to the given transform matrix
+/// @param[in] pInFrame input frame
+/// @param[in, out] pWarpedFrame transformed output frame
+/// @param[in] trfMatrix transform matrix
+/// @return a new thread that runs in the background, updates the warpedFrame when a new inFrame is available.
+std::thread threadedWarp(std::weak_ptr<const avtools::ThreadsafeFrame> pInFrame, std::weak_ptr<avtools::ThreadsafeFrame> pWarpedFrame, const std::string& calibrationFile);
 
 #endif /* correct_perspective_hpp */

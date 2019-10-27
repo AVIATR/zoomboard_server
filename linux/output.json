@@ -3,9 +3,9 @@
     {
         "muxer_options":
         {
-            "framerate": "30/1",
+            "framerate": "15/1",
             "strict": "normal",
-            "hls_time": "0.1",
+            "hls_time": "0.5",
             "hls_allow_cache": "0",
             "hls_flags": "+temp_file+delete_segments",
             "hls_list_size": "10",
@@ -14,7 +14,7 @@
         "codec_options": 
         {
             "name": "h264",
-            "video_size": "384x216",
+            "video_size": "640x360",
             "pixel_format": "yuv422p",
             "b" : "256000",
             "crf": "23",
@@ -46,7 +46,7 @@
         "codec_options": 
         {
             "name": "h264",
-            "video_size": "848x480",
+            "video_size": "1920x1080",
             "pixel_format": "yuv422p",
             "b" : "128000",
             "crf": "23",

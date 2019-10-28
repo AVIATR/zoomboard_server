@@ -20,9 +20,8 @@ extern ThreadManager g_ThreadMan;
 
 namespace
 {
-    static const std::string INPUT_WINDOW_NAME = "Input", OUTPUT_WINDOW_NAME = "Warped";
     static const cv::Scalar BORDER_COLOR = cv::Scalar(0,0,255);
-    static constexpr float MAX_MARKER_MOVEMENT = 25.f;
+    static constexpr float MAX_MARKER_MOVEMENT = 16.f;
 
     // Initialize logger
     log4cxx::LoggerPtr logger(log4cxx::Logger::getLogger("zoombrd.perspective"));

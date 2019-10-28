@@ -11,23 +11,18 @@
 
 namespace
 {
-    void logNestedException(const std::exception& e, log4cxx::LoggerPtr logger=nullptr)
+    log4cxx::LoggerPtr logger(log4cxx::Logger::getLogger("zoombrd.ThreadMan"));
+
+    void logNestedException(const std::exception& e)
     {
-        if (logger)
-        {
-            LOG4CXX_ERROR(logger, e.what() << ":");
-        }
-        else
-        {
-            std::cerr << e.what() << "\n";
-        }
+        LOG4CXX_ERROR(logger, e.what() << ":");
         try
         {
             std::rethrow_if_nested(e);
         }
         catch (const std::exception& nested)
         {
-            logNestedException(nested, logger);
+            logNestedException(nested);
         }
     }
 }   //::<anon>
@@ -44,6 +39,8 @@ exceptions_()
 
 ThreadManager::~ThreadManager()
 {
+    LOG4CXX_DEBUG(logger, "Thread Manager received end signal");
+
     end();
     join();
     // Log any outstanding exceptions
@@ -89,7 +86,7 @@ void ThreadManager::logExceptions()
         }
         catch (const std::exception& err)
         {
-            logNestedException(err, logger);
+            logNestedException(err);
         }
     }
     exceptions_.clear();

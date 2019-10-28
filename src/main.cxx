@@ -123,7 +123,7 @@ ThreadManager g_ThreadMan;
 int main(int argc, const char * argv[])
 {
     // Set up signal handler to end program
-    std::signal( SIGINT, [](int){g_ThreadMan.end();} );
+    std::signal( SIGINT, [](int v){LOG4CXX_DEBUG(logger, "Intercepted signal " << v); g_ThreadMan.end();} );
     std::cout << "press Ctrl+C to exit..." << std::endl;
 
     try{

@@ -90,17 +90,21 @@ message("\nProject = ${PROJECT_NAME}")
 message(STATUS "Build type = ${CMAKE_BUILD_TYPE}")
 message(STATUS "SOURCE DIR = ${PROJECT_SOURCE_DIR}")
 message(STATUS "BINARY DIR = ${PROJECT_BINARY_DIR}")
-#Add source folder
-add_subdirectory("src")
 message(STATUS "Target folder = ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}")
+message(STATUS "BUilding for platform = ${CMAKE_SYSTEM_NAME}")
 if (${CMAKE_SYSTEM_NAME} STREQUAL "Darwin") #Macos
     configure_file(macos/input.json "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/input.json" COPYONLY)
     configure_file(macos/output.json "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/output.json" COPYONLY)
 elseif (${CMAKE_SYSTEM_NAME} STREQUAL "Linux") #Linux
-    set(CMAKE_CXX_FLAGS "-Wl,-latomic") #workaround an issue with opencv on rpi
+    set(CMAKE_CXX_FLAGS "-Wl,-latomic") #workaround an issue with opencv on rpi - https://github.com/opencv/opencv/issues/15278
     configure_file(linux/input.json "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/input.json" COPYONLY)
     configure_file(linux/output.json "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/output.json" COPYONLY)
 endif()    
+
+###################################
+#Add source folder
+###################################
+add_subdirectory("src")
 
 # CPack packaging
 include(InstallRequiredSystemLibraries)

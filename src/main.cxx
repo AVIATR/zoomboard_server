@@ -101,7 +101,7 @@ namespace
     /// @return a new thread that reads frames from the input frame and writes to an output file
     std::thread threadedWrite(std::weak_ptr<const avtools::ThreadsafeFrame> pFrame, avtools::MediaWriter& writer);
 
-/// Callback function for libav log messages - used to direct them to the logger
+    /// Callback function for libav log messages - used to direct them to the logger
     /// @see av_log_default_callback, https://github.com/FFmpeg/FFmpeg/blob/n4.1.3/libavutil/log.c
     /// @param[in] p ptr to a struct of which the first field is a pointer to an AVClass struct.
     /// @param[in] level message log level

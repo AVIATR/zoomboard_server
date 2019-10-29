@@ -4,7 +4,7 @@ function usage {
     echo "Usage: $0 [-x|--xcode] [-h|--help] [-b|--build] [build_dir]"
     echo " -x               Create xcode project. By default, a make project is created."
     echo " -h               This help message."
-    echo " -b               Builds the project binaries after the project is built"
+    echo " -b [config]      Builds the project binaries after the project is built. config is either 'Release' or 'Debug'"
     echo " build_dir        Name of folder to put the build files in. Default is 'build'."
 }
 
@@ -13,6 +13,7 @@ function usage {
 #    exit 1
 #fi
 TARGET_DIR='build'
+CONFIG='Debug'
 
 #ARGS=(-DBUILD_SHARED_LIBS=YES)
 while [[ $# -gt 0 ]]
@@ -33,6 +34,8 @@ case $key in
         DO_BUILD_BINARIES=yes
         echo "Project binaries will be built."
         shift #past switch
+        CONFIG="$1"
+        shift
         ;;
     *)    # unknown option
         TARGET_DIR="$1" # save it in an array for later
@@ -65,8 +68,5 @@ cmake "${ARGS[@]}"
 
 if [ "${DO_BUILD_BINARIES}" = yes ]; then
     echo "Building binaries"
-    make -C ${TARGET_DIR}
+    cmake --build -B "${TARGET_DIR}" --config Release
 fi
-
-mkdir -p ${TARGET_DIR}/bin/
-ln -s "$(dirname $(pwd))/Data" ${TARGET_DIR}/bin/Data

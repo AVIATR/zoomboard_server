@@ -43,7 +43,7 @@ extern "C" {
 #include "Media.hpp"
 #include "ThreadsafeFrame.hpp"
 #include "ThreadManager.hpp"
-#include "correct_perspective.hpp"
+//#include "correct_perspective.hpp"
 #include "libav2opencv.hpp"
 
 using avtools::MediaError;
@@ -117,14 +117,21 @@ namespace
     std::mutex g_libavLogMutex;
 } //::<anon>
 
+/// Launches a thread that creates a warped matrix of the input frame according to the given transform matrix
+/// Defined in @ref correct_perspective.cpp
+/// @param[in] pInFrame input frame
+/// @param[in, out] pWarpedFrame transformed output frame
+/// @param[in] trfMatrix transform matrix
+/// @return a new thread that runs in the background, updates the warpedFrame when a new inFrame is available.
+std::thread threadedWarp(std::weak_ptr<const avtools::ThreadsafeFrame> pInFrame, std::weak_ptr<avtools::ThreadsafeFrame> pWarpedFrame, const std::string& calibrationFile);
+
 /// Maintains communication between threads re: exceptions & program end
 ThreadManager g_ThreadMan;
 
 int main(int argc, const char * argv[])
 {
     // Set up signal handler to end program
-    std::signal( SIGINT, [](int v){LOG4CXX_DEBUG(logger, "Intercepted signal " << v); g_ThreadMan.end();} );
-    std::cout << "press Ctrl+C to exit..." << std::endl;
+    std::signal( SIGINT, [](int v){g_ThreadMan.end(); std::exit(0); } );
 
     try{
 
@@ -171,19 +178,6 @@ int main(int argc, const char * argv[])
         LOG4CXX_FATAL(logger, "Error parsing command line arguments:" << err.what() << programDesc);
         return EXIT_FAILURE;
     }
-    if (vm.count("help"))
-    {
-        std::cout << programDesc << std::endl;
-        return EXIT_SUCCESS;
-    }
-    else if (vm.count("version"))
-    {
-        std::cout << PROGRAM_NAME << std::endl;
-        return EXIT_SUCCESS;
-    }
-
-    assert(vm.count("input"));
-    assert(vm.count("output"));
 
     // Set log level.
 #ifndef NDEBUG  //if debugging log it all.
@@ -206,6 +200,20 @@ int main(int argc, const char * argv[])
     libavLogger->setLevel(pLogLevel);
     av_log_set_level(avLogLevel);
     av_log_set_callback(&logLibAVMessages);
+
+    if (vm.count("help"))
+    {
+        std::cout << programDesc << std::endl;
+        return EXIT_SUCCESS;
+    }
+    else if (vm.count("version"))
+    {
+        std::cout << PROGRAM_NAME << std::endl;
+        return EXIT_SUCCESS;
+    }
+
+    assert(vm.count("input"));
+    assert(vm.count("output"));
 
     LOG4CXX_DEBUG(logger, "Program arguments:");
     for (auto it: vm)
@@ -239,6 +247,8 @@ int main(int argc, const char * argv[])
     }
     assert(inputOpts.size() == 1);
     LOG4CXX_DEBUG(logger, "Opening reader for " << inputOpts.begin()->first);
+    std::cout << "press Ctrl+C to exit..." << std::endl;
+
     avtools::MediaReader rdr(inputOpts.begin()->first, inputOpts.begin()->second.muxerOpts);
     const AVStream* pVidStr = rdr.getVideoStream();
     LOG4CXX_DEBUG(logger, "Input stream info:\n" << avtools::getStreamInfo(pVidStr) );
@@ -263,8 +273,8 @@ int main(int argc, const char * argv[])
         std::map<std::string, Options> outputOpts = getOptions(output.string());
         for (auto opt: outputOpts)
         {
-            fs::path dir(opt.first);
-            setUpOutputLocations(dir.parent_path(), vm.count("yes"));
+            LOG4CXX_DEBUG(logger, "Found requested output stream: " << opt.first);
+            setUpOutputLocations(fs::path(opt.first), vm.count("yes"));
             LOG4CXX_DEBUG(logger, "Opening writer for URL: " << opt.first <<"\nOptions: " << opt.second);
             writers.emplace_back(opt.first, opt.second.codecOpts, opt.second.muxerOpts);
             LOG4CXX_DEBUG(logger, "Output stream info:\n" << avtools::getStreamInfo(writers.back().getStream()));
@@ -278,14 +288,11 @@ int main(int argc, const char * argv[])
     }
 
     // Start writing (and correct perspective if requested)
-//    cv::Mat trfMatrix;
     auto pTrfFrame = avtools::ThreadsafeFrame::Get(pVidStr->codecpar->width, pVidStr->codecpar->height, PIX_FMT, pVidStr->time_base);
     if (vm.count("calibration_file"))
     {
         LOG4CXX_INFO(logger, "Calibration file found, will use Aruco markers for perspective adjustment.");
-//        trfMatrix = getPerspectiveTransformationMatrix(pInFrame, vm["calibration_file"].as<std::string>());
         assert( (AV_NOPTS_VALUE == (*pTrfFrame)->best_effort_timestamp) && (AV_NOPTS_VALUE == (*pTrfFrame)->pts) );
-//        g_ThreadMan.addThread( threadedWarp(pInFrame, pTrfFrame, trfMatrix) );
         g_ThreadMan.addThread( threadedWarp(pInFrame, pTrfFrame, vm["calibration_file"].as<std::string>()) );
         // add writers to writer perspective transformed frames
         for (auto &writer : writers)
@@ -307,6 +314,7 @@ int main(int argc, const char * argv[])
     // Cleanup
     // -----------
     g_ThreadMan.join();
+    LOG4CXX_DEBUG(logger, "Joined all threads");
     if (g_ThreadMan.hasExceptions())
     {
         LOG4CXX_ERROR(logger, "Exiting with errors...");
@@ -423,29 +431,27 @@ namespace
 
     void setUpOutputLocations(const fs::path& url, bool doAssumeYes)
     {
-        fs::path parent = url.has_parent_path() ? url.parent_path() : ".";
-        if (!url.has_parent_path())
+        LOG4CXX_DEBUG(logger, "Setting up " << url.string());
+        fs::path dir = url.has_parent_path() ? url.parent_path() : ".";
+        //See if it exists or needs to be created
+        if ( !fs::exists(dir) )
         {
-            //See if it exists or needs to be created
-            if ( !fs::exists(parent) )
+            LOG4CXX_DEBUG(logger, "Folder " << dir << " does not exist. Creating.");
+            if (!fs::create_directory(dir))
             {
-                LOG4CXX_DEBUG(logger, "Url folder " << parent << " does not exist. Creating.");
-                if (!fs::create_directory(parent))
-                {
-                    throw std::runtime_error("Unable to create folder " + parent.string());
-                }
+                throw std::runtime_error("Unable to create folder " + dir.string());
             }
-            else if (!fs::is_directory(parent))
-            {
-                throw std::runtime_error(parent.string() + " exists, and is not a folder.");
-            }
-            assert(fs::is_directory(parent));
         }
+        else if (!fs::is_directory(dir))
+        {
+            throw std::runtime_error(dir.string() + " exists, and is not a folder.");
+        }
+        assert(fs::is_directory(dir));
         // Remove old stream files if they're around
         fs::path prefix = url.stem();
-        LOG4CXX_DEBUG(logger, "Will remove " << prefix << "* from " << parent);
+        LOG4CXX_DEBUG(logger, "Will remove \"" << prefix.string() << "*\" from " << dir);
         std::vector<fs::path> filesToRemove;
-        for (fs::recursive_directory_iterator it(parent), itEnd; it != itEnd; ++it)
+        for (fs::recursive_directory_iterator it(dir), itEnd; it != itEnd; ++it)
         {
             if( fs::is_regular_file(*it)
                && (it->path().filename().string().find(prefix.string()) == 0)
@@ -457,7 +463,7 @@ namespace
         }
         if ( !filesToRemove.empty() )
         {
-            LOG4CXX_INFO(logger, "Found " << filesToRemove.size() << " files starting with '" << prefix << "'"<< std::endl);
+            std::cout << "Found " << filesToRemove.size() << " files starting with '" << prefix << "'" << std::endl;
             if ( doAssumeYes || promptYesNo("Remove them?") )
             {
 #ifndef NDEBUG
@@ -637,7 +643,7 @@ namespace
                 }
             }
             g_ThreadMan.end();
-            LOG4CXX_DEBUG(logger, "Exiting reader thread.");
+            LOG4CXX_DEBUG(logger, "Exiting thread: isEnded=" << std::boolalpha << g_ThreadMan.isEnded());
         });
     }
 
@@ -646,7 +652,7 @@ namespace
         return std::thread([pFrame, &writer](){
             try
             {
-                log4cxx::MDC::put("threadname", "writer: " + writer.url());
+                log4cxx::MDC::put("threadname", fs::path(writer.url()).stem().string() + " writer");
                 avtools::TimeType ts = AV_NOPTS_VALUE;
                 while (!g_ThreadMan.isEnded())
                 {
@@ -654,7 +660,6 @@ namespace
                     if (!ppFrame)
                     {
                         LOG4CXX_DEBUG(logger, "Writer received null frame - closing.");
-                        writer.write(nullptr, avtools::TimeBaseType{});
                         break;
                     }
                     const auto& inFrame = *ppFrame;
@@ -662,16 +667,14 @@ namespace
                         auto lock = inFrame.getReadLock();
                         LOG4CXX_DEBUG(logger, "Waiting for incoming frame.");
                         inFrame.cv.wait(lock, [&inFrame, ts](){return g_ThreadMan.isEnded() || (inFrame->best_effort_timestamp > ts);});   //note that we assume the timebase of the incoming frames do not change
-                        if (g_ThreadMan.isEnded())
+                        if ( !g_ThreadMan.isEnded() )
                         {
-                            writer.write(nullptr, avtools::TimeBaseType{});
-                            break;
+                            assert(inFrame->best_effort_timestamp > ts);
+                            ts = inFrame->best_effort_timestamp;
+                            LOG4CXX_DEBUG(logger, "Writer received frame:\n" << inFrame.info(1));
+                            //Push frame to filtergraph
+                            writer.write(inFrame);
                         }
-                        assert(inFrame->best_effort_timestamp > ts);
-                        ts = inFrame->best_effort_timestamp;
-                        LOG4CXX_DEBUG(logger, "Writer received frame:\n" << inFrame.info(1));
-                        //Push frame to filtergraph
-                        writer.write(inFrame);
                     }
                 }
             }
@@ -688,7 +691,9 @@ namespace
                 }
             }
             //Cleanup writer
-            LOG4CXX_DEBUG(logger, "Exiting writer thread");
+            LOG4CXX_DEBUG(logger, "Closing writer");
+            writer.write(nullptr, avtools::TimeBaseType{});
+            LOG4CXX_DEBUG(logger, "Exiting thread: isEnded=" << std::boolalpha << g_ThreadMan.isEnded());
         });
     }
 

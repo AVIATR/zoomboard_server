@@ -5,7 +5,7 @@
 //  Created by Ender Tekin on 8/7/19.
 //
 
-#include "correct_perspective.hpp"
+//#include "correct_perspective.hpp"
 #include <vector>
 #include <log4cxx/logger.h>
 #ifndef NDEBUG
@@ -15,6 +15,7 @@
 #include "opencv2/aruco.hpp"
 #include "libav2opencv.hpp"
 #include "ThreadManager.hpp"
+#include "ThreadsafeFrame.hpp"
 
 extern ThreadManager g_ThreadMan;
 
@@ -239,6 +240,10 @@ namespace
         return trfMatrix;
     }
 
+    /// Calculates the approximate movement of the markers. If this is above a threshold, we should try to re-calculate the perspective transform
+    /// @param[in] prevCorners previous locations of the marker corners
+    /// @param[in] corners most recently seen corners
+    /// @return normalized approximate motion in pixels
     float calculateMarkerMovement(const std::vector< std::vector<cv::Point2f> >& prevCorners, const std::vector< std::vector<cv::Point2f> >& corners)
     {
         float motion = 0.f;
@@ -256,14 +261,9 @@ namespace
                 }
             }
         }
-        if (nMarkers > 0)
-        {
-            return motion / nMarkers; //normalize motion per matching point
-        }
-        else
-        {
-            return FLT_MAX;
-        }
+        motion = (nMarkers > 0 ? motion / nMarkers : FLT_MAX); //normalize motion per matching point
+        LOG4CXX_DEBUG(logger, "Calculated motion: " << motion);
+        return motion;
     }
 } //::<anon>
 
@@ -348,13 +348,12 @@ std::thread threadedWarp(std::weak_ptr<const avtools::ThreadsafeFrame> pInFrame,
                         }
                         LOG4CXX_DEBUG(logger, "Warped frame info: \n" << warpedFrame.info(1));
                     }
-                    warpedFrame.cv.notify_all();
+                    warpedFrame.cv.notify_all();    //need to call this manually, normally update() would cll this
                 }
             }
         }
         catch (std::exception& err)
         {
-            LOG4CXX_DEBUG(logger, "Caught exception in warper thread" << err.what());
             try
             {
                 std::throw_with_nested( std::runtime_error("Warper thread error") );
@@ -365,6 +364,6 @@ std::thread threadedWarp(std::weak_ptr<const avtools::ThreadsafeFrame> pInFrame,
                 g_ThreadMan.end();
             }
         }
-        LOG4CXX_DEBUG(logger, "Exiting warper thread: isEnded=" << std::boolalpha << g_ThreadMan.isEnded());
+        LOG4CXX_DEBUG(logger, "Exiting thread: isEnded=" << std::boolalpha << g_ThreadMan.isEnded());
     });
 }

@@ -11,7 +11,7 @@
 
 namespace
 {
-    log4cxx::LoggerPtr logger(log4cxx::Logger::getLogger("zoombrd.ThreadMan"));
+    auto logger = log4cxx::Logger::getLogger("zoombrd");
 
     void logNestedException(const std::exception& e)
     {
@@ -39,6 +39,7 @@ exceptions_()
 
 ThreadManager::~ThreadManager()
 {
+    auto logger = log4cxx::Logger::getLogger("zoombrd");
     LOG4CXX_DEBUG(logger, "Thread Manager received end signal");
 
     end();
@@ -64,8 +65,12 @@ void ThreadManager::addThread(std::thread &&thread)
 
 void ThreadManager::addException(std::exception_ptr errPtr)
 {
-    std::lock_guard<std::mutex> lk(mutex_);
-    exceptions_.push_back(errPtr);
+    LOG4CXX_DEBUG(log4cxx::Logger::getLogger("zoombrd"), "Adding exception from " << std::this_thread::get_id());
+    std::unique_lock<std::mutex> lk(mutex_, std::try_to_lock);
+    if (lk.owns_lock())
+    {
+        exceptions_.push_back(errPtr);
+    }
 }
 
 bool ThreadManager::hasExceptions() const
@@ -77,7 +82,6 @@ bool ThreadManager::hasExceptions() const
 void ThreadManager::logExceptions()
 {
     std::lock_guard<std::mutex> lk(mutex_);
-    auto logger = log4cxx::Logger::getLogger("zoombrd");
     for (auto const& e : exceptions_)
     {
         try
@@ -94,16 +98,13 @@ void ThreadManager::logExceptions()
 
 void ThreadManager::join()
 {
-    std::lock_guard<std::mutex> lk(mutex_);
+//    std::lock_guard<std::mutex> lk(mutex_);
     // Wait for threads to end
     for (auto& thread: threads_)
     {
         if (thread.joinable())
         {
-#ifndef NDEBUG
-            auto logger = log4cxx::Logger::getLogger("zoombrd");
             LOG4CXX_DEBUG(logger, "Joining thread " << thread.get_id());
-#endif
             thread.join();  //wait for all threads to finish
         }
     }

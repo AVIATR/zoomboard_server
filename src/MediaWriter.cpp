@@ -482,6 +482,7 @@ namespace avtools
             assert(formatCtx_);
             try
             {
+                LOG4CXX_DEBUG(logger, "Flushing writer")
                 write(nullptr, TimeBaseType{});
             }
             catch (std::exception& err)
@@ -489,12 +490,14 @@ namespace avtools
                 LOG4CXX_ERROR(logger, "Error while flushing packets and closing encoder: " << err.what());
             }
             //Write trailer
+            LOG4CXX_DEBUG(logger, "Writing trailer")
             int ret = av_write_trailer(formatCtx_.get());
             if (ret < 0)
             {
                 LOG4CXX_ERROR(logger, "Error writing trailer: " << av_err2str(ret));
             }
             // Close file if output is file
+            LOG4CXX_DEBUG(logger, "Closing file")
             if ( formatCtx_->oformat && !(formatCtx_->oformat->flags & AVFMT_NOFILE) )
             {
                 ret = avio_close(formatCtx_->pb);
@@ -504,6 +507,7 @@ namespace avtools
                 }
             }
 
+            LOG4CXX_DEBUG(logger, "Freeing filter graph")
             avfilter_inout_free(&pIn_);
             avfilter_inout_free(&pOut_);
             avfilter_graph_free(&pGraph_);
@@ -554,7 +558,7 @@ namespace avtools
             /// Pop output frames from filtergraph
             while (true)
             {
-                LOG4CXX_DEBUG(logger, "Writre reading frames from filtergraph");
+                LOG4CXX_DEBUG(logger, "Writer reading frames from filtergraph");
                 avtools::TimeBaseType outTimebase = av_buffersink_get_time_base(pOut_->filter_ctx);
                 ret = av_buffersink_get_frame(pOut_->filter_ctx, filtFrame_.get());
                 if ( (ret == AVERROR(EAGAIN)) || (ret == AVERROR_EOF) )
@@ -627,7 +631,7 @@ namespace avtools
         }
     }
 
-    void MediaWriter::write(const Frame &frame)
+    void MediaWriter::write(const Frame& frame)
     {
         assert(frame.type == AVMediaType::AVMEDIA_TYPE_VIDEO);
         write(frame.get(), frame.timebase);

@@ -34,11 +34,14 @@ namespace avtools
     ThreadsafeFrame::~ThreadsafeFrame()
     {
         LOG4CXX_DEBUG(logger, "Releasing threadsafe frame from thread at " << (void*) pFrame_->data[0] );
-        auto lk = getWriteLock();
-        if (pConvCtx_)
         {
-            sws_freeContext(pConvCtx_);
+            auto lk = getWriteLock();
+            if (pConvCtx_)
+            {
+                sws_freeContext(pConvCtx_);
+            }
         }
+        cv.notify_all();    //If there was anyone waiting on this frame, signal them before disappearing
     };
 
     void ThreadsafeFrame::update(const avtools::Frame &frm)

@@ -28,9 +28,9 @@ public:
     /// Dtor
     ~ThreadManager();
     /// Used to signal the program to end.
-    void end();
+    void end() noexcept;
     /// @return true if the program has been signaled to end
-    bool isEnded() const;
+    bool isEnded() const noexcept;
     /// Adds a thread to the list of managed threads
     /// @param[in] thread new thread to add.
     void addThread(std::thread&& thread);
@@ -38,10 +38,9 @@ public:
     /// @param[in] an exception pointer. This will be stored and later logged at program end
     void addException(std::exception_ptr errPtr);
     /// @return true if there are logged exceptions
-    bool hasExceptions() const;
-    /// Logs all the exceptions. Once logged, all exceptions are cleared.
-    void logExceptions();
-    /// Wait for threads to complete
+    bool hasExceptions() const noexcept;
+    /// Signals for program to end and waits for threads to complete
+    /// @return true if exited cleanly, false if there were exceptions logged
     void join();
 };  //::<anon>::ThreadManager
 

@@ -33,6 +33,7 @@ namespace avtools
 
     ThreadsafeFrame::~ThreadsafeFrame()
     {
+        LOG4CXX_DEBUG(logger, "Releasing threadsafe frame from thread at " << (void*) pFrame_->data[0] );
         auto lk = getWriteLock();
         if (pConvCtx_)
         {

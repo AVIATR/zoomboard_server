@@ -593,7 +593,7 @@ namespace avtools
         const std::string& url,
         Dictionary& codecOpts,
         Dictionary& muxerOpts
-                             ):
+    ):
     pImpl_( std::make_unique<Implementation>(url, codecOpts, muxerOpts) )
     {
         assert( pImpl_);

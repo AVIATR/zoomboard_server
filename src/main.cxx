@@ -131,9 +131,7 @@ ThreadManager g_ThreadMan;
 int main(int argc, const char * argv[])
 {
     // Set up signal handler to end program
-    std::signal( SIGINT, [](int v){g_ThreadMan.end(); std::exit(0); } );
-
-    try{
+    std::signal( SIGINT, [](int v){g_ThreadMan.end();} );
 
     // Set up logger. See https://logging.apache.org/log4cxx/latest_stable/usage.html for more info,
     //see https://logging.apache.org/log4cxx/latest_stable/apidocs/classlog4cxx_1_1_pattern_layout.html for patterns
@@ -148,28 +146,27 @@ int main(int argc, const char * argv[])
     log4cxx::BasicConfigurator::configure(fileAppenderPtr);
 #endif
 
+    bpo::variables_map vm;
     //Parse command line options
     static const std::string PROGRAM_NAME = fs::path(argv[0]).filename().string() + " v" + std::to_string(ZOOMBOARD_SERVER_VERSION_MAJOR) + "." + std::to_string(ZOOMBOARD_SERVER_VERSION_MINOR);
-
     bpo::options_description programDesc(PROGRAM_NAME + " options");
     bpo::positional_options_description posDesc;
-    posDesc.add("input", 1);
-    posDesc.add("output", 1);
-    programDesc.add_options()
-    ("help,h", "produce help message")
-    ("version,v", "program version")
-    ("yes,y", "answer 'yes' to every prompt")
-    ("calibration_file,c", bpo::value<std::string>(), "calibration file to use if using aruco markers, created by calibrate_camera. If one is provided, it is used to search for Aruco markers to use for perspective correction.")
-    ("output,o", bpo::value<std::string>()->default_value("output.json"), "output file or configuration file")
-    ("input,i", bpo::value<std::string>()->default_value("input.json"), "input file or configuration file.")
-#ifndef NDEBUG
-    ("quiet,q", "suppresses messages that are not errors or warnings in debug builds")
-#endif
-    ;
-
-    bpo::variables_map vm;
     try
     {
+        posDesc.add("input", 1);
+        posDesc.add("output", 1);
+        programDesc.add_options()
+        ("help,h", "produce help message")
+        ("version,v", "program version")
+        ("yes,y", "answer 'yes' to every prompt")
+        ("calibration_file,c", bpo::value<std::string>(), "calibration file to use if using aruco markers, created by calibrate_camera. If one is provided, it is used to search for Aruco markers to use for perspective correction.")
+        ("output,o", bpo::value<std::string>()->default_value("output.json"), "output file or configuration file")
+        ("input,i", bpo::value<std::string>()->default_value("input.json"), "input file or configuration file.")
+    #ifndef NDEBUG
+        ("quiet,q", "suppresses messages that are not errors or warnings in debug builds")
+    #endif
+        ;
+
         bpo::store(bpo::command_line_parser(argc, argv).options(programDesc).positional(posDesc).run(), vm);
         bpo::notify(vm);
     }
@@ -221,113 +218,122 @@ int main(int argc, const char * argv[])
         LOG4CXX_DEBUG(logger, it.first << ": " << it.second.as<std::string>());
     }
 
-    // -----------
-    // Open the reader and start the thread to read frames
-    // -----------
-    const fs::path input = vm["input"].as<std::string>();
-    if ( !fs::exists( input ) )
+    const AVStream* pVidStr =  nullptr;
+    try
     {
-        throw std::runtime_error("Could not find input " + input.string());
-    }
-    std::map<std::string, Options> inputOpts;
-    if ( strequals(input.extension().string(), ".json") )
-    {
-        LOG4CXX_INFO(logger, "Using input configuration file: " << input);
-        inputOpts = getOptions(input.string());
-        if (inputOpts.size() != 1)
+        // -----------
+        // Open the reader and start the thread to read frames
+        // -----------
+        const fs::path input = vm["input"].as<std::string>();
+        if ( !fs::exists( input ) )
         {
-            throw std::runtime_error("Only one input is allowed, found " + std::to_string(inputOpts.size()));
+            throw std::runtime_error("Could not find input " + input.string());
         }
-        LOG4CXX_DEBUG(logger, "Input options:\nURL = " << inputOpts.begin()->first << "\nOptions = " << inputOpts.begin()->second);
-    }
-    else
-    {
-        LOG4CXX_INFO(logger, "Using input file: " << input);
-        inputOpts[input.string()] = Options();
-    }
-    assert(inputOpts.size() == 1);
-    LOG4CXX_DEBUG(logger, "Opening reader for " << inputOpts.begin()->first);
-    std::cout << "press Ctrl+C to exit..." << std::endl;
-
-    avtools::MediaReader rdr(inputOpts.begin()->first, inputOpts.begin()->second.muxerOpts);
-    const AVStream* pVidStr = rdr.getVideoStream();
-    LOG4CXX_DEBUG(logger, "Input stream info:\n" << avtools::getStreamInfo(pVidStr) );
-
-    auto pInFrame = avtools::ThreadsafeFrame::Get(pVidStr->codecpar->width, pVidStr->codecpar->height, PIX_FMT, pVidStr->time_base);
-    g_ThreadMan.addThread(threadedRead(pInFrame, rdr));
-
-    // -----------
-    // Open the outputs and start writer threads
-    // -----------
-    // Open the writer(s)
-    std::vector<avtools::MediaWriter> writers;
-    const fs::path output = vm["output"].as<std::string>();
-    if ( strequals(output.extension().string(), ".json") )
-    {
-        if ( !fs::exists( output ) )
+        std::map<std::string, Options> inputOpts;
+        if ( strequals(input.extension().string(), ".json") )
         {
-            throw std::runtime_error("Could not find output configuration file " + output.string());
+            LOG4CXX_INFO(logger, "Using input configuration file: " << input);
+            inputOpts = getOptions(input.string());
+            if (inputOpts.size() != 1)
+            {
+                throw std::runtime_error("Only one input is allowed, found " + std::to_string(inputOpts.size()));
+            }
+            LOG4CXX_DEBUG(logger, "Input options:\nURL = " << inputOpts.begin()->first << "\nOptions = " << inputOpts.begin()->second);
         }
-        LOG4CXX_INFO(logger, "Using output configuration file: " << output);
-
-        std::map<std::string, Options> outputOpts = getOptions(output.string());
-        for (auto opt: outputOpts)
+        else
         {
-            LOG4CXX_DEBUG(logger, "Found requested output stream: " << opt.first);
-            setUpOutputLocations(fs::path(opt.first), vm.count("yes"));
-            LOG4CXX_DEBUG(logger, "Opening writer for URL: " << opt.first <<"\nOptions: " << opt.second);
-            writers.emplace_back(opt.first, opt.second.codecOpts, opt.second.muxerOpts);
-            LOG4CXX_DEBUG(logger, "Output stream info:\n" << avtools::getStreamInfo(writers.back().getStream()));
+            LOG4CXX_INFO(logger, "Using input file: " << input);
+            inputOpts[input.string()] = Options();
         }
-    }
-    else
-    {
-        LOG4CXX_INFO(logger, "Using output file: " << output);
-        Options outOpts = getOptsFromStream(pVidStr);   //copy required options from the input stream
-        writers.emplace_back(output.string(), outOpts.codecOpts, outOpts.muxerOpts);
-    }
+        assert(inputOpts.size() == 1);
+        LOG4CXX_DEBUG(logger, "Opening reader for " << inputOpts.begin()->first);
 
-    // Start writing (and correct perspective if requested)
-    auto pTrfFrame = avtools::ThreadsafeFrame::Get(pVidStr->codecpar->width, pVidStr->codecpar->height, PIX_FMT, pVidStr->time_base);
-    if (vm.count("calibration_file"))
-    {
-        LOG4CXX_INFO(logger, "Calibration file found, will use Aruco markers for perspective adjustment.");
-        assert( (AV_NOPTS_VALUE == (*pTrfFrame)->best_effort_timestamp) && (AV_NOPTS_VALUE == (*pTrfFrame)->pts) );
-        g_ThreadMan.addThread( threadedWarp(pInFrame, pTrfFrame, vm["calibration_file"].as<std::string>()) );
-        // add writers to writer perspective transformed frames
-        for (auto &writer : writers)
+        avtools::MediaReader rdr(inputOpts.begin()->first, inputOpts.begin()->second.muxerOpts);
+        pVidStr = rdr.getVideoStream();
+        if ( !pVidStr )
         {
-            g_ThreadMan.addThread( threadedWrite(pTrfFrame, writer) );
+            throw std::runtime_error("Unable to get video stream from " + inputOpts.begin()->first);
         }
-    }
-    else
-    {
-        LOG4CXX_INFO(logger, "No calibration file provided, continuing without perspective adjustment.");
-        // add writers to writer input frames
-        for (auto &writer : writers)
+        LOG4CXX_DEBUG(logger, "Input stream info:\n" << avtools::getStreamInfo(pVidStr) );
+
+        auto pInFrame = avtools::ThreadsafeFrame::Get(pVidStr->codecpar->width, pVidStr->codecpar->height, PIX_FMT, pVidStr->time_base);
+
+        std::cout << "press Ctrl+C to exit..." << std::endl;
+        g_ThreadMan.addThread(threadedRead(pInFrame, rdr));
+
+        // -----------
+        // Open the outputs and start writer threads
+        // -----------
+        // Open the writer(s)
+        std::vector<avtools::MediaWriter> writers;
+        const fs::path output = vm["output"].as<std::string>();
+        if ( strequals(output.extension().string(), ".json") )
         {
-            g_ThreadMan.addThread( threadedWrite(pInFrame, writer) );
+            if ( !fs::exists( output ) )
+            {
+                throw std::runtime_error("Could not find output configuration file " + output.string());
+            }
+            LOG4CXX_INFO(logger, "Using output configuration file: " << output);
+
+            std::map<std::string, Options> outputOpts = getOptions(output.string());
+            for (auto opt: outputOpts)
+            {
+                LOG4CXX_DEBUG(logger, "Found requested output stream: " << opt.first);
+                setUpOutputLocations(fs::path(opt.first), vm.count("yes"));
+                LOG4CXX_DEBUG(logger, "Opening writer for URL: " << opt.first <<"\nOptions: " << opt.second);
+                writers.emplace_back(opt.first, opt.second.codecOpts, opt.second.muxerOpts);
+                LOG4CXX_DEBUG(logger, "Output stream info:\n" << avtools::getStreamInfo(writers.back().getStream()));
+            }
         }
-    }
+        else
+        {
+            LOG4CXX_INFO(logger, "Using output file: " << output);
+            Options outOpts = getOptsFromStream(pVidStr);   //copy required options from the input stream
+            writers.emplace_back(output.string(), outOpts.codecOpts, outOpts.muxerOpts);
+        }
 
-    // -----------
-    // Cleanup
-    // -----------
-    g_ThreadMan.join();
-    LOG4CXX_DEBUG(logger, "Joined all threads");
-    if (g_ThreadMan.hasExceptions())
-    {
-        LOG4CXX_ERROR(logger, "Exiting with errors...");
-        return EXIT_FAILURE;
-    }
-    LOG4CXX_DEBUG(logger, "Exiting successfully...");
-    return EXIT_SUCCESS;
+        // Start writing (and correct perspective if requested)
+        auto pTrfFrame = avtools::ThreadsafeFrame::Get(pVidStr->codecpar->width, pVidStr->codecpar->height, PIX_FMT, pVidStr->time_base);
+        if (vm.count("calibration_file"))
+        {
+            LOG4CXX_INFO(logger, "Calibration file found, will use Aruco markers for perspective adjustment.");
+            assert( (AV_NOPTS_VALUE == (*pTrfFrame)->best_effort_timestamp) && (AV_NOPTS_VALUE == (*pTrfFrame)->pts) );
+            g_ThreadMan.addThread( threadedWarp(pInFrame, pTrfFrame, vm["calibration_file"].as<std::string>()) );
+            // add writers to writer perspective transformed frames
+            for (auto &writer : writers)
+            {
+                g_ThreadMan.addThread( threadedWrite(pTrfFrame, writer) );
+            }
+        }
+        else
+        {
+            LOG4CXX_INFO(logger, "No calibration file provided, continuing without perspective adjustment.");
+            // add writers to writer input frames
+            for (auto &writer : writers)
+            {
+                g_ThreadMan.addThread( threadedWrite(pInFrame, writer) );
+            }
+        }
 
-    }
+        g_ThreadMan.join();
+        LOG4CXX_DEBUG(logger, "Joined all threads");
+
+        // -----------
+        // Cleanup
+        // -----------
+
+        if (g_ThreadMan.hasExceptions())
+        {
+            LOG4CXX_ERROR(logger, "Exiting with errors...");
+            return EXIT_FAILURE;
+        }
+        LOG4CXX_DEBUG(logger, "Exiting successfully...");
+        return EXIT_SUCCESS;
+
+    }   //end try
     catch (std::exception& err)
     {
         LOG4CXX_ERROR(logger, "Exiting with errors...");
-        g_ThreadMan.end();
         g_ThreadMan.addException(std::current_exception());
         return EXIT_FAILURE;
     }
@@ -680,6 +686,7 @@ namespace
             }
             catch (std::exception& err)
             {
+                LOG4CXX_ERROR(logger, "Caught writer exception: " << err.what());
                 try
                 {
                     std::throw_with_nested( std::runtime_error("writer thread error") );

@@ -8,6 +8,7 @@
 #include "ThreadManager.hpp"
 #include <iostream>
 #include <log4cxx/logger.h>
+#include <cassert>
 
 namespace
 {

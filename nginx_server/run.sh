@@ -27,10 +27,10 @@ shift $((OPTIND -1))
 
 echo "Stream folder is ${STREAM_FOLDER}"
 #launch nginx server
-docker run -d --name zoombrd \
+docker run -d --rm --name zoombrd \
     -v$(pwd)/nginx.conf:/etc/nginx/nginx.conf \
     -v$(pwd)/html:/usr/share/nginx/html \
-    -v"$(pwd)/${STREAM_FOLDER}":/usr/share/nginx/hls \
+    -v"${STREAM_FOLDER}":/usr/share/nginx/hls \
     -p8080:8080 \
     tiangolo/nginx-rtmp
 

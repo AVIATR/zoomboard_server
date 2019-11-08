@@ -1,5 +1,5 @@
 {
-    "stream_lr.m3u8": 
+    "/tmp/zoombrd/stream_lr.m3u8": 
     {
         "muxer_options":
         {
@@ -31,7 +31,7 @@
             "tune": "zerolatency"
         }
     },
-    "stream_hr.m3u8":
+    "/tmp/zoombrd/stream_hr.m3u8":
     {
         "muxer_options":
         {

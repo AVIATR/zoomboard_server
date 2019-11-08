@@ -87,6 +87,7 @@ To explore the frame information & group of frames structure, use ffprobe.
 * For detailed frame info: `ffprobe -show_frames <stream.m3u8>`
 * For compact info re: frame type, timestamps etc: `ffprobe -show_entries frame=key_frame,pict_type,best_effort_timestamp_time -of compact <stream.m3u8>`
 and replace `<stream.m3u8>` with the name of the particular output stream playlist.
+* To play with minimal buffering and display frame info, use: `ffplay -vf "[in]drawtext=text='time=%{localtime}':box=1:x=(w-tw)/2:y=2*lh, drawtext=text='frame=%{n}, ts=%{pts\:hms}':box=1:x=(w-tw)/2:y=h-(2*lh)" -fflags nobuffer <stream.m3u8>`
 
 ### Discovered demuxer and decoder options using intergrated camera & avfoundation:
 #### Demuxer options

@@ -56,7 +56,6 @@ ThreadManager::~ThreadManager()
         }
     }
     exceptions_.clear();
-
 }
 
 void ThreadManager::end() noexcept
@@ -80,12 +79,6 @@ void ThreadManager::addException(std::exception_ptr errPtr)
     assert(errPtr);
     LOG4CXX_ERROR(logger, "Adding exception from " << std::this_thread::get_id());
     exceptions_.push_back(errPtr);
-
-//    std::unique_lock<std::mutex> lk(mutex_, std::try_to_lock);
-//    if (lk.owns_lock())
-//    {
-//        exceptions_.push_back(errPtr);
-//    }
 }
 
 bool ThreadManager::hasExceptions() const noexcept

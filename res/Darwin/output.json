@@ -8,7 +8,7 @@
             "hls_time": "0.1",
             "hls_allow_cache": "0",
             "hls_flags": "+temp_file+delete_segments",
-            "hls_list_size": "10",
+            "hls_list_size": "20",
             "hls_delete_threshold": "1"
         },
         "codec_options": 
@@ -35,12 +35,12 @@
     {
         "muxer_options":
         {
-            "framerate": "1/1",
+            "framerate": "3/1",
             "strict": "normal",
             "hls_time": "1.0",
             "hls_allow_cache": "0",
             "hls_flags": "+temp_file+delete_segments",
-            "hls_list_size": "5",
+            "hls_list_size": "10",
             "hls_delete_threshold": "1"
         },
         "codec_options": 
@@ -54,7 +54,7 @@
             "qmax": "51",
             "qdiff": "4",
             "flags": "+cgop+low_delay+qscale",
-            "g": "1",
+            "g": "4",
             "me_range": "16",
             "strict": "normal",
             "level": "5.0",

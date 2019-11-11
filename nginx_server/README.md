@@ -1,4 +1,5 @@
-# Installing nginx
+# Using nginx server
+## Install nginx on the Raspberry Pi
 nginx acts as the server that manages the connections and serves the streams that are created by libav/ffmpeg. 
 Instructions to build & install nginx can be found [here](https://github.com/arut/nginx-rtmp-module/wiki/Getting-started-with-nginx-rtmp). 
 
@@ -15,5 +16,5 @@ sudo service supervisor stop
 sudo service supervisor start
 ```
 
-### Testing locally
-We can also use docker to run nginx locally for testing, try `./run.sh`.
+## Testing locally
+We can also use docker to run nginx locally for testing, try `./run.sh -s <stream_folder>`.

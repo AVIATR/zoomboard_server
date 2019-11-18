@@ -43,7 +43,7 @@ extern "C" {
 #include "Media.hpp"
 #include "ThreadsafeFrame.hpp"
 #include "ThreadManager.hpp"
-//#include "correct_perspective.hpp"
+#include "PerspectiveWarper.hpp"
 #include "libav2opencv.hpp"
 
 using avtools::MediaError;
@@ -89,12 +89,6 @@ namespace
     /// @return an options structure with the muxer & codc options filled in from the values in pStr
     Options getOptsFromStream(const AVStream* pStr);
 
-    /// Function that starts a stream reader that reads from a stream int to a threaded frame
-    /// @param[in,out] pFrame threadsafe frame to write to
-    /// @param[in] rdr an opened media reader
-    /// @return a new thread that reads frames from the input stream and updates the threaded frame
-    std::thread threadedRead(std::weak_ptr<avtools::ThreadsafeFrame> pFrame, avtools::MediaReader& rdr);
-
     /// Function that starts a stream writer that writes to a stream from a threaded frame
     /// @param[in] pFrame threadsafe frame to read from
     /// @param[in] writer media writer instance
@@ -123,7 +117,7 @@ namespace
 /// @param[in, out] pWarpedFrame transformed output frame
 /// @param[in] trfMatrix transform matrix
 /// @return a new thread that runs in the background, updates the warpedFrame when a new inFrame is available.
-std::thread threadedWarp(std::weak_ptr<const avtools::ThreadsafeFrame> pInFrame, std::weak_ptr<avtools::ThreadsafeFrame> pWarpedFrame, const std::string& calibrationFile);
+//std::thread threadedWarp(std::weak_ptr<const avtools::ThreadsafeFrame> pInFrame, std::weak_ptr<avtools::ThreadsafeFrame> pWarpedFrame, const std::string& calibrationFile);
 
 /// Maintains communication between threads re: exceptions & program end
 ThreadManager g_ThreadMan;
@@ -198,6 +192,14 @@ int main(int argc, const char * argv[])
     av_log_set_level(avLogLevel);
     av_log_set_callback(&logLibAVMessages);
 
+#ifndef NDEBUG
+    LOG4CXX_DEBUG(logger, "Program arguments:");
+    for (auto it: vm)
+    {
+        LOG4CXX_DEBUG(logger, it.first << ": " << it.second.as<std::string>());
+    }
+#endif
+
     if (vm.count("help"))
     {
         std::cout << programDesc << std::endl;
@@ -212,131 +214,138 @@ int main(int argc, const char * argv[])
     assert(vm.count("input"));
     assert(vm.count("output"));
 
-    LOG4CXX_DEBUG(logger, "Program arguments:");
-    for (auto it: vm)
+    const AVStream* pVidStr =  nullptr;
+
+    // -----------
+    // Open the reader and start reading frames
+    // -----------
+    const fs::path input = vm["input"].as<std::string>();
+    if ( !fs::exists( input ) )
     {
-        LOG4CXX_DEBUG(logger, it.first << ": " << it.second.as<std::string>());
+        throw std::runtime_error("Could not find input " + input.string());
+    }
+    std::map<std::string, Options> inputOpts;
+    if ( strequals(input.extension().string(), ".json") )
+    {
+        LOG4CXX_INFO(logger, "Using input configuration file: " << input);
+        inputOpts = getOptions(input.string());
+        if (inputOpts.size() != 1)
+        {
+            throw std::runtime_error("Only one input is allowed, found " + std::to_string(inputOpts.size()));
+        }
+        LOG4CXX_DEBUG(logger, "Input options:\nURL = " << inputOpts.begin()->first << "\nOptions = " << inputOpts.begin()->second);
+    }
+    else
+    {
+        LOG4CXX_INFO(logger, "Using input file: " << input);
+        inputOpts[input.string()] = Options();
+    }
+    assert(inputOpts.size() == 1);
+    LOG4CXX_DEBUG(logger, "Opening reader for " << inputOpts.begin()->first);
+
+    avtools::MediaReader rdr(inputOpts.begin()->first, inputOpts.begin()->second.muxerOpts);
+    pVidStr = rdr.getVideoStream();
+    if ( !pVidStr )
+    {
+        throw std::runtime_error("Unable to get video stream from " + inputOpts.begin()->first);
+    }
+    LOG4CXX_DEBUG(logger, "Input stream info:\n" << avtools::getStreamInfo(pVidStr) );
+
+    std::cout << "press Ctrl+C to exit..." << std::endl;
+    avtools::Frame frame(*rdr.getVideoStream()->codecpar);
+    std::unique_ptr<avtools::PerspectiveAdjustor> hAdjustor = nullptr;
+    if (vm.count("calibration_file"))
+    {
+        LOG4CXX_INFO(logger, "Calibration file found, will use Aruco markers for perspective adjustment.");
+        try
+        {
+            hAdjustor = std::make_unique<avtools::PerspectiveAdjustor>(vm["calibration_file"].as<std::string>());
+            assert(hAdjustor);
+        }
+        catch (std::exception& err)
+        {
+            LOG4CXX_ERROR(logger, "Unable to initialize perspective corrector." << err.what());
+        }
     }
 
-    const AVStream* pVidStr =  nullptr;
-    try
+    // -----------
+    // Open the writers & start writer threads
+    // -----------
+    // Open the writer(s)
+    std::vector<avtools::MediaWriter> writers;
+    const fs::path output = vm["output"].as<std::string>();
+    if ( strequals(output.extension().string(), ".json") )
     {
-        // -----------
-        // Open the reader and start the thread to read frames
-        // -----------
-        const fs::path input = vm["input"].as<std::string>();
-        if ( !fs::exists( input ) )
+        if ( !fs::exists( output ) )
         {
-            throw std::runtime_error("Could not find input " + input.string());
+            throw std::runtime_error("Could not find output configuration file " + output.string());
         }
-        std::map<std::string, Options> inputOpts;
-        if ( strequals(input.extension().string(), ".json") )
+        LOG4CXX_INFO(logger, "Using output configuration file: " << output);
+
+        std::map<std::string, Options> outputOpts = getOptions(output.string());
+        for (auto opt: outputOpts)
         {
-            LOG4CXX_INFO(logger, "Using input configuration file: " << input);
-            inputOpts = getOptions(input.string());
-            if (inputOpts.size() != 1)
-            {
-                throw std::runtime_error("Only one input is allowed, found " + std::to_string(inputOpts.size()));
-            }
-            LOG4CXX_DEBUG(logger, "Input options:\nURL = " << inputOpts.begin()->first << "\nOptions = " << inputOpts.begin()->second);
+            LOG4CXX_DEBUG(logger, "Found requested output stream: " << opt.first);
+            setUpOutputLocations(fs::path(opt.first), vm.count("yes"));
+            LOG4CXX_DEBUG(logger, "Opening writer for URL: " << opt.first <<"\nOptions: " << opt.second);
+            writers.emplace_back(opt.first, opt.second.codecOpts, opt.second.muxerOpts);
+            LOG4CXX_DEBUG(logger, "Output stream info:\n" << avtools::getStreamInfo(writers.back().getStream()));
         }
-        else
+    }
+    else
+    {
+        LOG4CXX_INFO(logger, "Using output file: " << output);
+        Options outOpts = getOptsFromStream(pVidStr);   //copy required options from the input stream
+        writers.emplace_back(output.string(), outOpts.codecOpts, outOpts.muxerOpts);
+    }
+
+    // Start writer threads
+    auto pFrameToWrite = avtools::ThreadsafeFrame::Get(pVidStr->codecpar->width, pVidStr->codecpar->height, PIX_FMT, pVidStr->time_base);
+
+    for (auto &writer : writers)
+    {
+        g_ThreadMan.addThread( threadedWrite(pFrameToWrite, writer) );
+    }
+
+    // Start read/write loop
+    while (!g_ThreadMan.isEnded())
+    {
+        // read frame
+        const AVStream* pS = rdr.read(frame);
+        if (!pS)
         {
-            LOG4CXX_INFO(logger, "Using input file: " << input);
-            inputOpts[input.string()] = Options();
+            g_ThreadMan.end(); //if the reader ends, end program
+            break;
         }
-        assert(inputOpts.size() == 1);
-        LOG4CXX_DEBUG(logger, "Opening reader for " << inputOpts.begin()->first);
-
-        avtools::MediaReader rdr(inputOpts.begin()->first, inputOpts.begin()->second.muxerOpts);
-        pVidStr = rdr.getVideoStream();
-        if ( !pVidStr )
+        frame->best_effort_timestamp -= pS->start_time;
+        frame->pts -= pS->start_time;
+        assert( av_cmp_q(frame.timebase, pS->time_base) == 0);
+        LOG4CXX_DEBUG(logger, "Frame read: \n" << avtools::getFrameInfo(frame.get(), pS, 1));
+        // Correct perspective if requested / initialized
+        if (hAdjustor)
         {
-            throw std::runtime_error("Unable to get video stream from " + inputOpts.begin()->first);
-        }
-        LOG4CXX_DEBUG(logger, "Input stream info:\n" << avtools::getStreamInfo(pVidStr) );
-
-        auto pInFrame = avtools::ThreadsafeFrame::Get(pVidStr->codecpar->width, pVidStr->codecpar->height, PIX_FMT, pVidStr->time_base);
-
-        std::cout << "press Ctrl+C to exit..." << std::endl;
-        g_ThreadMan.addThread(threadedRead(pInFrame, rdr));
-
-        // -----------
-        // Open the outputs and start writer threads
-        // -----------
-        // Open the writer(s)
-        std::vector<avtools::MediaWriter> writers;
-        const fs::path output = vm["output"].as<std::string>();
-        if ( strequals(output.extension().string(), ".json") )
-        {
-            if ( !fs::exists( output ) )
-            {
-                throw std::runtime_error("Could not find output configuration file " + output.string());
-            }
-            LOG4CXX_INFO(logger, "Using output configuration file: " << output);
-
-            std::map<std::string, Options> outputOpts = getOptions(output.string());
-            for (auto opt: outputOpts)
-            {
-                LOG4CXX_DEBUG(logger, "Found requested output stream: " << opt.first);
-                setUpOutputLocations(fs::path(opt.first), vm.count("yes"));
-                LOG4CXX_DEBUG(logger, "Opening writer for URL: " << opt.first <<"\nOptions: " << opt.second);
-                writers.emplace_back(opt.first, opt.second.codecOpts, opt.second.muxerOpts);
-                LOG4CXX_DEBUG(logger, "Output stream info:\n" << avtools::getStreamInfo(writers.back().getStream()));
-            }
+            pFrameToWrite->update( hAdjustor->correctPerspective(frame) );
         }
         else
         {
-            LOG4CXX_INFO(logger, "Using output file: " << output);
-            Options outOpts = getOptsFromStream(pVidStr);   //copy required options from the input stream
-            writers.emplace_back(output.string(), outOpts.codecOpts, outOpts.muxerOpts);
+            pFrameToWrite->update(frame);
         }
+    }
 
-        // Start writing (and correct perspective if requested)
-        auto pTrfFrame = avtools::ThreadsafeFrame::Get(pVidStr->codecpar->width, pVidStr->codecpar->height, PIX_FMT, pVidStr->time_base);
-        if (vm.count("calibration_file"))
-        {
-            LOG4CXX_INFO(logger, "Calibration file found, will use Aruco markers for perspective adjustment.");
-            assert( (AV_NOPTS_VALUE == (*pTrfFrame)->best_effort_timestamp) && (AV_NOPTS_VALUE == (*pTrfFrame)->pts) );
-            g_ThreadMan.addThread( threadedWarp(pInFrame, pTrfFrame, vm["calibration_file"].as<std::string>()) );
-            // add writers to writer perspective transformed frames
-            for (auto &writer : writers)
-            {
-                g_ThreadMan.addThread( threadedWrite(pTrfFrame, writer) );
-            }
-        }
-        else
-        {
-            LOG4CXX_INFO(logger, "No calibration file provided, continuing without perspective adjustment.");
-            // add writers to writer input frames
-            for (auto &writer : writers)
-            {
-                g_ThreadMan.addThread( threadedWrite(pInFrame, writer) );
-            }
-        }
+    g_ThreadMan.join();
+    LOG4CXX_DEBUG(logger, "Joined all threads");
 
-        g_ThreadMan.join();
-        LOG4CXX_DEBUG(logger, "Joined all threads");
+    // -----------
+    // Cleanup
+    // -----------
 
-        // -----------
-        // Cleanup
-        // -----------
-
-        if (g_ThreadMan.hasExceptions())
-        {
-            LOG4CXX_ERROR(logger, "Exiting with errors...");
-            return EXIT_FAILURE;
-        }
-        LOG4CXX_DEBUG(logger, "Exiting successfully...");
-        return EXIT_SUCCESS;
-
-    }   //end try
-    catch (std::exception& err)
+    if (g_ThreadMan.hasExceptions())
     {
         LOG4CXX_ERROR(logger, "Exiting with errors...");
-        g_ThreadMan.addException(std::current_exception());
         return EXIT_FAILURE;
     }
+    LOG4CXX_DEBUG(logger, "Exiting successfully...");
+    return EXIT_SUCCESS;
 }
 
 namespace
@@ -608,50 +617,8 @@ namespace
     }
 
     // -------------------------
-    // Threaded reader & writer functions
+    // Threaded writer functions
     // -------------------------
-    std::thread threadedRead(std::weak_ptr<avtools::ThreadsafeFrame> pFrame, avtools::MediaReader& rdr)
-    {
-        return std::thread([pFrame, &rdr](){
-            try
-            {
-                log4cxx::MDC::put("threadname", "reader");
-                avtools::Frame frame(*rdr.getVideoStream()->codecpar);
-                while (!g_ThreadMan.isEnded())
-                {
-                    const AVStream* pS = rdr.read(frame);
-                    if (!pS)
-                    {
-                        g_ThreadMan.end(); //if the reader ends, end program
-                        break;
-                    }
-                    frame->best_effort_timestamp -= pS->start_time;
-                    frame->pts -= pS->start_time;
-                    assert( av_cmp_q(frame.timebase, pS->time_base) == 0);
-                    LOG4CXX_DEBUG(logger, "Frame read: \n" << avtools::getFrameInfo(frame.get(), pS, 1));
-                    auto ppFrame = pFrame.lock();
-                    if (!ppFrame)
-                    {
-                        throw std::runtime_error("Threaded input frame is null.");
-                    }
-                    ppFrame->update(frame);
-                }
-            }
-            catch (std::exception& err)
-            {
-                try
-                {
-                    std::throw_with_nested( std::runtime_error("Reader thread error") );
-                }
-                catch (...)
-                {
-                    g_ThreadMan.addException(std::current_exception());
-                }
-            }
-            g_ThreadMan.end();
-            LOG4CXX_DEBUG(logger, "Exiting thread: isEnded=" << std::boolalpha << g_ThreadMan.isEnded());
-        });
-    }
 
     std::thread threadedWrite(std::weak_ptr<const avtools::ThreadsafeFrame> pFrame, avtools::MediaWriter& writer)
     {

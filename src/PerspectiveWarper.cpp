@@ -6,18 +6,18 @@
 //
 
 //#include "correct_perspective.hpp"
-#include <vector>
 #include <log4cxx/logger.h>
-#ifndef NDEBUG
-#include <opencv2/highgui.hpp>
-#endif
-#include "opencv2/imgproc.hpp"
-#include "opencv2/aruco.hpp"
 #include "libav2opencv.hpp"
 #include "ThreadManager.hpp"
 #include "ThreadsafeFrame.hpp"
+#include "PerspectiveWarper.hpp"
+#include "opencv2/core.hpp"
+#include "opencv2/imgproc.hpp"
+#include "opencv2/aruco.hpp"
+extern "C" {
+#include <libswscale/swscale.h>
+}
 
-extern ThreadManager g_ThreadMan;
 
 namespace
 {
@@ -79,85 +79,6 @@ namespace
                              / (std::pow(k3 - 1.f, 2) + (std::pow(k3 * m3.y - m1.y, 2) + std::pow(k3 * m3.x - m1.x, 2)) / fSqr ) );
         }
     }
-
-    class BoardFinder
-    {
-    private:
-        std::vector< std::vector<cv::Point2f> > corners_;   ///< detected corners of the markers
-        std::vector<int> ids_;                              ///< id's of the detected markers
-        cv::Mat cameraMatrix_;                              ///< camera matrix
-        cv::Mat distCoeffs_;                                ///< distortion coefficients
-        cv::Ptr<cv::aruco::Dictionary> pDict_;              ///< pointer to the dictionary of aruco markers
-
-    public:
-
-        BoardFinder(const std::string& calibrationFile):
-        pDict_(nullptr)
-        {
-            corners_.reserve(16);
-            ids_.reserve(4);
-            cv::Mat markers;
-            int markerSz=0;
-            try
-            {
-                cv::FileStorage fs(calibrationFile, cv::FileStorage::READ);
-                fs["markers"] >> markers;
-                fs["marker_size"] >> markerSz;
-                if ( !fs["camera_matrix"].empty() )
-                {
-                    LOG4CXX_DEBUG(logger, "Initializing camera matrix");
-                    fs["camera_matrix"] >> cameraMatrix_;
-                }
-                else
-                {
-                    assert(cameraMatrix_.empty());
-                }
-                if ( !fs["distortion_coefficients"].empty() )
-                {
-                    fs["distortion_coefficients"] >> distCoeffs_;
-                }
-                else
-                {
-                    assert(distCoeffs_.empty());
-                }
-            }
-            catch (std::exception& err)
-            {
-                std::throw_with_nested( std::runtime_error("Unable to read calibration information from " + calibrationFile) );
-            }
-            assert( !markers.empty() && (markerSz > 0) );
-            pDict_ = cv::makePtr<cv::aruco::Dictionary>(markers, markerSz);
-        }
-
-        /// Finds and returns the corners of the aruco markers seen in the image
-        /// @param[in] img input image to search for markers
-        /// @return a vector of markers
-        /// There should be 4 markers, and the returned vector _corners_ is always of size 4
-        /// The markers are sorted such that _corners_[i] always corresponds to the i'th marker.
-        /// If a marker i is not visible, than _corners_[i] is empty.
-        std::vector< std::vector<cv::Point2f> > getCorners(const cv::Mat& img)
-        {
-            //Find markers
-            corners_.clear();
-            ids_.clear();
-            // detect markers
-            cv::aruco::detectMarkers(img, pDict_, corners_, ids_,
-                                     cv::aruco::DetectorParameters::create(), cv::noArray(),
-                                     cameraMatrix_.empty() ? cv::noArray() : cameraMatrix_,
-                                     distCoeffs_.empty() ? cv::noArray() : distCoeffs_
-                                     );
-
-            /// Sort markers
-            std::vector< std::vector<cv::Point2f> > sortedCorners(4);
-            int nMarkersFound = (int) corners_.size();
-            assert(nMarkersFound == ids_.size());
-            for (int n = 0; n < nMarkersFound; ++n)
-            {
-                sortedCorners[ids_[n]] = corners_[n];
-            }
-            return sortedCorners;
-        }
-    };  // BoardFinder
 
     /// Returns the relevant outer corners of the markers.
     /// @param[in] corners detected marker corners
@@ -267,103 +188,184 @@ namespace
     }
 } //::<anon>
 
-
-std::thread threadedWarp(std::weak_ptr<const avtools::ThreadsafeFrame> pInFrame, std::weak_ptr<avtools::ThreadsafeFrame> pWarpedFrame, const std::string& calibrationFile)
+namespace avtools
 {
-    return std::thread([pInFrame, pWarpedFrame, calibrationFile](){
-        try
-        {
-            log4cxx::MDC::put("threadname", "warper");
-            // Read board information & create board finder
-            BoardFinder boardFinder(calibrationFile);
-            std::vector< std::vector<cv::Point2f> > prevCorners(4);    //previously detected marker corners
-            cv::Mat_<double> trfMatrix; //perspective transform matrix
-            // Start the loop - every frame gets checked for markers
-            // If all markers are visible, a new perspective transform is calculated.
-            // If not all markers are visible, but the detected ones are in approximately the same location as before, then the previously calculated transform is used.
-            // If the detected markers are in different locations than before, then no transform is applied
-            avtools::TimeType ts = AV_NOPTS_VALUE;
-            while (!g_ThreadMan.isEnded())
-            {
-                auto ppInFrame = pInFrame.lock();
-                if (!ppInFrame)
-                {
-                    if (g_ThreadMan.isEnded())
-                    {
-                        break;
-                    }
-                    throw std::runtime_error("Warper received null frame.");
-                }
-                const auto& inFrame = *ppInFrame;
-                {
-                    auto rLock = inFrame.getReadLock();
-                    inFrame.cv.wait(rLock, [&inFrame, ts](){return g_ThreadMan.isEnded() ||  (inFrame->best_effort_timestamp > ts);});    //wait until fresh frame is available
-                    if (g_ThreadMan.isEnded())  //if the wait ended because program ended, quit
-                    {
-                        break;
-                    }
-                    ts = inFrame->best_effort_timestamp;
-                    auto ppWarpedFrame = pWarpedFrame.lock();
-                    if (!ppWarpedFrame )
-                    {
-                        throw std::runtime_error("Warper output frame is null");
-                    }
-                    auto& warpedFrame = *ppWarpedFrame;
-                    {
-                        auto wLock = warpedFrame.getWriteLock();
-                        assert(warpedFrame->best_effort_timestamp < ts);
-                        assert( (av_cmp_q(warpedFrame.timebase, inFrame.timebase) == 0) && (warpedFrame.type == AVMediaType::AVMEDIA_TYPE_VIDEO) && (inFrame.type == AVMediaType::AVMEDIA_TYPE_VIDEO) );
-                        cv::Mat inImg = getImage(inFrame);
-                        //Look for markers in this frame
-                        auto corners = boardFinder.getCorners(inImg);
-                        // See if corners have moved since last time
-                        if (calculateMarkerMovement(prevCorners, corners) > MAX_MARKER_MOVEMENT)
-                        {
-                            auto boundary = getOuterCorners(corners);
-                            if (boundary.empty())   // do not have all markers visible to calculate trf matrix
-                            {
-                                trfMatrix = cv::Mat_<double>();
-                            }
-                            else
-                            {
-                                trfMatrix = getPerspectiveTransformationMatrix(boundary, inImg.size());
-                                prevCorners = corners;
-                            }
-                        }
 
-                        cv::Mat outImg = getImage(warpedFrame);
-                        if (trfMatrix.empty())
-                        {
-                            inImg.copyTo(outImg);
-                        }
-                        else
-                        {
-                            LOG4CXX_DEBUG(logger, "Warper using transformation matrix: " << trfMatrix );
-                            cv::warpPerspective(inImg, outImg, trfMatrix, outImg.size(), cv::InterpolationFlags::INTER_LANCZOS4);
-                        }
-                        int ret = av_frame_copy_props(warpedFrame.get(), inFrame.get());
-                        if (ret < 0)
-                        {
-                            throw avtools::MediaError("Unable to copy frame properties", ret);
-                        }
-                        LOG4CXX_DEBUG(logger, "Warped frame info: \n" << warpedFrame.info(1));
-                    }
-                    warpedFrame.cv.notify_all();    //need to call this manually, normally update() would cll this
-                }
-            }
-        }
-        catch (std::exception& err)
+    ///@class Implementation of the perspective adjustor class
+    class PerspectiveAdjustor::Implementation
+    {
+    private:
+        std::vector< std::vector<cv::Point2f> > corners_;       ///< detected corners of the markers
+        std::vector< std::vector<cv::Point2f> > prevCorners_;   ///< previously detected marker
+        std::vector<int> ids_;                                  ///< id's of the detected markers
+        cv::Mat cameraMatrix_;                                  ///< camera matrix
+        cv::Mat distCoeffs_;                                    ///< distortion coefficients
+        cv::Ptr<cv::aruco::Dictionary> pDict_;                  ///< pointer to the dictionary of aruco markers
+        Frame convFrame_;                                       ///< incoming frame, converted to RGB if needed
+        Frame warpedFrame_;                                     ///< perspective corrected frame
+        SwsContext* pConvCtx_;                                  ///< Image conversion context used if the update images are different than the declared frame dimensions or format
+
+        /// Finds and returns the corners of the aruco markers seen in the image
+        /// @param[in] img input image to search for markers
+        /// @return a vector of markers
+        /// There should be 4 markers, and the returned vector _corners_ is always of size 4
+        /// The markers are sorted such that _corners_[i] always corresponds to the i'th marker.
+        /// If a marker i is not visible, than _corners_[i] is empty.
+        std::vector< std::vector<cv::Point2f> > getCorners(const cv::Mat& img)
         {
+            //Find markers
+            corners_.clear();
+            ids_.clear();
+            // detect markers
+            cv::aruco::detectMarkers(img, pDict_, corners_, ids_,
+                                     cv::aruco::DetectorParameters::create(), cv::noArray(),
+                                     cameraMatrix_.empty() ? cv::noArray() : cameraMatrix_,
+                                     distCoeffs_.empty() ? cv::noArray() : distCoeffs_
+                                     );
+
+            /// Sort markers
+            std::vector< std::vector<cv::Point2f> > sortedCorners(4);
+            int nMarkersFound = (int) corners_.size();
+            assert(nMarkersFound == ids_.size());
+            for (int n = 0; n < nMarkersFound; ++n)
+            {
+                sortedCorners[ids_[n]] = corners_[n];
+            }
+            return sortedCorners;
+        }
+
+    public:
+        /// Ctor
+        /// @param[in] calibrationFile calibration file that has information re: the camera matrix and markers to use
+        Implementation(const std::string& calibrationFile):
+        corners_(),
+        prevCorners_(4),
+        pDict_(nullptr),
+        convFrame_(nullptr),
+        warpedFrame_(nullptr),
+        pConvCtx_(nullptr)
+        {
+            corners_.reserve(4);
+            ids_.reserve(4);
+            cv::Mat markers;
+            int markerSz=0;
             try
             {
-                std::throw_with_nested( std::runtime_error("Warper thread error") );
+                cv::FileStorage fs(calibrationFile, cv::FileStorage::READ);
+                fs["markers"] >> markers;
+                fs["marker_size"] >> markerSz;
+                assert( !markers.empty() && (markerSz > 0) );
+                pDict_ = cv::makePtr<cv::aruco::Dictionary>(markers, markerSz);
+                if ( !fs["camera_matrix"].empty() )
+                {
+                    LOG4CXX_DEBUG(logger, "Initializing camera matrix");
+                    fs["camera_matrix"] >> cameraMatrix_;
+                }
+                else
+                {
+                    assert(cameraMatrix_.empty());
+                }
+                if ( !fs["distortion_coefficients"].empty() )
+                {
+                    fs["distortion_coefficients"] >> distCoeffs_;
+                }
+                else
+                {
+                    assert(distCoeffs_.empty());
+                }
             }
-            catch (...)
+            catch (std::exception& err)
             {
-                g_ThreadMan.addException(std::current_exception());
-                g_ThreadMan.end();
+                std::throw_with_nested( std::runtime_error("Unable to read calibration information from " + calibrationFile) );
             }
         }
-        LOG4CXX_DEBUG(logger, "Exiting thread: isEnded=" << std::boolalpha << g_ThreadMan.isEnded());
-    });
-}
+
+        /// Dtor
+        ~Implementation()
+        {
+            if (pConvCtx_)
+            {
+                sws_freeContext(pConvCtx_);
+            }
+        }
+
+        /// Corrects the perspective of an input frame based on detected aruco markers
+        /// Defined in @ref correct_perspective.cpp
+        /// @param[in] inFrame input frame
+        /// @return reference to transformed output frame
+        const Frame& correctPerspective(const Frame& inFrame)
+        {
+            //initialize warpedFrame_ if not initialized
+            assert(inFrame);
+            cv::Mat inImg;
+            if (!warpedFrame_)
+            {
+                warpedFrame_ = avtools::Frame(inFrame->width, inFrame->height, PIX_FMT, inFrame.timebase);
+                assert(warpedFrame_);
+            }
+            if (inFrame->format == PIX_FMT) //see if we need to change the pixel format, too
+            {
+                inImg = getImage(inFrame);
+            }
+            else
+            {
+                convFrame_ = avtools::Frame(inFrame->width, inFrame->height, PIX_FMT, inFrame.timebase);
+                assert(convFrame_);
+                pConvCtx_ = sws_getCachedContext(pConvCtx_, inFrame->width, inFrame->height, (AVPixelFormat) inFrame->format, convFrame_->width, convFrame_->height, (AVPixelFormat) convFrame_->format, SWS_LANCZOS | SWS_ACCURATE_RND, nullptr, nullptr, nullptr);
+                int ret = sws_scale(pConvCtx_, inFrame->data, inFrame->linesize, 0, inFrame->height, convFrame_->data, convFrame_->linesize);
+                if (ret < 0)
+                {
+                    throw MediaError("Error converting incoming frame to RGB");
+                }
+                inImg = getImage(convFrame_);
+            }
+            cv::Mat_<double> trfMatrix; //perspective transform matrix
+            //Look for markers in this frame
+            auto corners = getCorners(inImg);
+            // See if corners have moved since last time
+            if (calculateMarkerMovement(prevCorners_, corners) > MAX_MARKER_MOVEMENT)
+            {
+                auto boundary = getOuterCorners(corners);
+                if (boundary.empty())   // do not have all markers visible to calculate trf matrix
+                {
+                    trfMatrix = cv::Mat_<double>();
+                }
+                else
+                {
+                    trfMatrix = getPerspectiveTransformationMatrix(boundary, inImg.size());
+                    prevCorners_ = corners;
+                }
+            }
+
+            if (trfMatrix.empty())
+            {
+                return inFrame;
+            }
+            LOG4CXX_DEBUG(logger, "Warper using transformation matrix: " << trfMatrix );
+            cv::Mat outImg = getImage(warpedFrame_);
+            cv::warpPerspective(inImg, outImg, trfMatrix, outImg.size(), cv::InterpolationFlags::INTER_LANCZOS4);
+            int ret = av_frame_copy_props(warpedFrame_.get(), inFrame.get());
+            if (ret < 0)
+            {
+                throw avtools::MediaError("Unable to copy frame properties", ret);
+            }
+            LOG4CXX_DEBUG(logger, "Warped frame info: \n" << warpedFrame_.info(1));
+            return warpedFrame_;
+        }
+    };  //avtools::PerpsectiveAdjustor::Implementation
+
+    PerspectiveAdjustor::PerspectiveAdjustor(const std::string& calibrationFile):
+    pImpl_( std::make_unique<Implementation>(calibrationFile) )
+    {
+        assert(pImpl_);
+    }
+
+    const Frame& PerspectiveAdjustor::correctPerspective(const Frame& inFrame)
+    {
+        assert(pImpl_);
+        return pImpl_->correctPerspective(inFrame);
+    }
+
+    PerspectiveAdjustor::~PerspectiveAdjustor() = default;
+} //::avtools
+

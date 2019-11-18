@@ -94,39 +94,37 @@ namespace avtools
     // AVFrame wrapper
     // -------------------------------------------------
 
-    Frame::Frame(AVFrame* pFrame, AVMediaType typ/*=AVMEDIA_TYPE_UNKNOWN*/, TimeBaseType tb/*=TimeBaseType{}*/):
-    pFrame_(pFrame ? pFrame : av_frame_alloc()),
+    Frame::Frame(AVFrame* pFrame/*=nullptr*/, AVMediaType typ/*=AVMEDIA_TYPE_UNKNOWN*/, TimeBaseType tb/*=TimeBaseType{}*/) noexcept:
+    pFrame_(pFrame),
     type(typ),
     timebase(tb)
     {
-        if (!pFrame_)
-        {
-            throw MediaError("Frame: Unable to allocate frame data.");
-        }
-        if (!pFrame)
-        {
-            pFrame_->pts = pFrame_->best_effort_timestamp = AV_NOPTS_VALUE;
-        }
     }
 
     Frame::Frame(int width, int height, AVPixelFormat format, TimeBaseType tb/*=TimeBaseType{}*/, AVColorSpace cs/*=AVColorSpace::AVCOL_SPC_RGB*/):
-    Frame(nullptr, AVMediaType::AVMEDIA_TYPE_VIDEO, tb)
+    Frame(av_frame_alloc(), AVMediaType::AVMEDIA_TYPE_VIDEO, tb)
     {
-        assert(pFrame_);
         try
         {
+            if (!pFrame_)
+            {
+                throw MediaError("Unable to allocate frame");
+            }
             initVideoFrame(pFrame_, width, height, format, cs);
             pFrame_->best_effort_timestamp = pFrame_->pts = AV_NOPTS_VALUE;
         }
         catch (std::exception& err)
         {
-            av_frame_free(&pFrame_);
+            if (pFrame_)
+            {
+                av_frame_free(&pFrame_);
+            }
             std::throw_with_nested(MediaError("Frame: Unable to initialize video frame."));
         }
     }
-    
+
     Frame::Frame(const AVCodecParameters& cPar, TimeBaseType tb/*=TimeBaseType{}*/):
-    Frame(nullptr, cPar.codec_type, tb)
+    Frame(av_frame_alloc(), cPar.codec_type, tb)
     {
         try
         {
@@ -203,6 +201,14 @@ namespace avtools
         if (pFrame_)
         {
             av_frame_unref(pFrame_);
+        }
+        else
+        {
+            pFrame_ = av_frame_alloc();
+            if (!pFrame_)
+            {
+                throw MediaError("Unable to allocate frame.");
+            }
         }
         type = AVMediaType::AVMEDIA_TYPE_UNKNOWN;
         int ret = av_frame_ref(pFrame_, frame.get());

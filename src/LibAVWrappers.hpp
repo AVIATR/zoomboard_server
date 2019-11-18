@@ -57,7 +57,7 @@ namespace avtools
         /// @param[in] type type of the data that this frame is expected to contain.
         /// @param[in] tb timebase of the frame if known
         /// @throw MediaError if there is a problem allocating a frame of the given type.
-        Frame(AVFrame* pFrame=nullptr, AVMediaType type=AVMEDIA_TYPE_UNKNOWN, TimeBaseType tb=TimeBaseType{});
+        Frame(AVFrame* pFrame=nullptr, AVMediaType type=AVMEDIA_TYPE_UNKNOWN, TimeBaseType tb=TimeBaseType{}) noexcept;
         
         /// Ctor that allocates a frame according the provided codec parameters
         /// @param[in] codecPar codec parameters

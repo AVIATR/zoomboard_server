@@ -232,9 +232,9 @@ namespace avtools
                 }
             }
             assert(0 == ret);
-            pkt_.unref();
             while (true) //read all available packets from encoder, and mux them
             {
+                pkt_.unref();
                 LOG4CXX_DEBUG(logger, "Writer reading packet from encoder");
                 ret = avcodec_receive_packet(codecCtx_.get(), pkt_.get());
                 if (ret == AVERROR(EAGAIN))
@@ -561,6 +561,7 @@ namespace avtools
                 LOG4CXX_DEBUG(logger, "Writer reading frames from filtergraph");
                 avtools::TimeBaseType outTimebase = av_buffersink_get_time_base(pOut_->filter_ctx);
                 assert(filtFrame_);
+                av_frame_unref(filtFrame_.get());
                 ret = av_buffersink_get_frame(pOut_->filter_ctx, filtFrame_.get());
                 if ( (ret == AVERROR(EAGAIN)) || (ret == AVERROR_EOF) )
                 {

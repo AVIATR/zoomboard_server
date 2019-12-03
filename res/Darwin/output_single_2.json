@@ -8,10 +8,10 @@
             "max_delay": "200000",
             "analyzeduration": "200000",
             "flush_packets": "1",
-            "hls_time": "1",
+            "hls_time": "0.2",
             "hls_allow_cache": "0",
             "hls_flags": "temp_file+delete_segments+independent_segments",
-            "hls_list_size": "10",
+            "hls_list_size": "30",
             "hls_delete_threshold": "1"
         },
         "codec_options": 

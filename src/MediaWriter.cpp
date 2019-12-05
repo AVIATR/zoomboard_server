@@ -210,6 +210,24 @@ namespace avtools
                 }
             }
 
+            // We will add a filter to add some information to the frame for debugging
+            {
+                Dictionary args;
+                args.add("text", "time=%{localtime}");
+                args.add("box", 1);
+                args.add("x", "(w-tw)/2");
+                args.add("y", "2*lh");
+                addFilterToGraph("drawtext", "textfield 1", args, pGraph_);
+            }
+            {
+                Dictionary args;
+                args.add("text", "frame=%{n}, ts=%{pts:hms}");
+                args.add("box", 1);
+                args.add("x", "(w-tw)/2");
+                args.add("y", "4*lh");
+                addFilterToGraph("drawtext", "textfield 2", args, pGraph_);
+            }
+
             //Init sink
             pOut_->name = av_strdup("output");
             pOut_->pad_idx = 0;

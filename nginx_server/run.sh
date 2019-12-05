@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 
-STREAM_FOLDER='.'
+STREAM_FOLDER=$(pwd)
 function USAGE {
     echo "Usage: run.sh [-h] [-s stream_folder]"
 }

@@ -63,6 +63,33 @@ namespace
 
         return pCtx;
     }
+
+#ifndef NDEBUG
+    template<class T> const char ContextName[] = "";
+
+    template<> const char ContextName<AVFormatContext>[] = "format";
+    template<> const char ContextName<AVCodecContext>[] = "codec";
+
+    template <class T>
+    void printContextOptions(const T* pCtx, const avtools::Dictionary& opts)
+    {
+        const std::string contextName = ContextName<T>;
+        avtools::CharBuf buf;
+        int ret = av_opt_serialize((void*) pCtx, AV_OPT_FLAG_ENCODING_PARAM, 0, &buf.get(), ':', '\n');
+        if (ret < 0)
+        {
+            throw avtools::MediaError("Unable to serialize " + contextName + " options", ret);
+        }
+        LOG4CXX_DEBUG(logger, "Available " << contextName << " options:\n" << buf.get());
+        ret = av_opt_serialize((void*) pCtx->priv_data, AV_OPT_FLAG_ENCODING_PARAM, 0, &buf.get(), ':', '\n');
+        if (ret < 0)
+        {
+            throw avtools::MediaError("Unable to serialize " + contextName + " private options", ret);
+        }
+        LOG4CXX_DEBUG(logger, "Available " << contextName << " private options:\n" << buf.get());
+        LOG4CXX_DEBUG(logger, "Unused " << contextName << "  options:\n" << opts);
+    }
+#endif
 }   //::<anon>
 
 namespace avtools
@@ -183,6 +210,24 @@ namespace avtools
                 }
             }
 
+            // We will add a filter to add some information to the frame for debugging
+            {
+                Dictionary args;
+                args.add("text", "time=%{localtime}");
+                args.add("box", 1);
+                args.add("x", "(w-tw)/2");
+                args.add("y", "2*lh");
+                addFilterToGraph("drawtext", "textfield 1", args, pGraph_);
+            }
+            {
+                Dictionary args;
+                args.add("text", "frame=%{n}, ts=%{pts:hms}");
+                args.add("box", 1);
+                args.add("x", "(w-tw)/2");
+                args.add("y", "4*lh");
+                addFilterToGraph("drawtext", "textfield 2", args, pGraph_);
+            }
+
             //Init sink
             pOut_->name = av_strdup("output");
             pOut_->pad_idx = 0;
@@ -258,7 +303,6 @@ namespace avtools
 //                pkt_->duration = av_rescale_q(pkt_->duration, codecCtx_->time_base, timebase);
                 LOG4CXX_DEBUG(logger, "Muxing packet to " << url() << ":\n " << pkt_.info(1));
                 //mux encoded frame
-//                ret = av_interleaved_write_frame(formatCtx_.get(), pkt_.get());
                 ret = av_write_frame(formatCtx_.get(), pkt_.get()); //only one stream
                 if (ret < 0)
                 {
@@ -316,22 +360,7 @@ namespace avtools
                 throw MediaError("Unable to set private muxer options", ret);
             }
 #ifndef NDEBUG
-            LOG4CXX_DEBUG(logger, "Unused muxer private options:\n" << muxerOpts);
-            {
-                avtools::CharBuf buf;
-                ret = av_opt_serialize(formatCtx_.get(), AV_OPT_FLAG_ENCODING_PARAM, 0, &buf.get(), ':', '\n');
-                if (ret < 0)
-                {
-                    throw avtools::MediaError("Unable to serialize muxer options", ret);
-                }
-                LOG4CXX_DEBUG(logger, "Available muxer options:\n" << buf.get());
-                ret = av_opt_serialize(formatCtx_->priv_data, AV_OPT_FLAG_ENCODING_PARAM, 0, &buf.get(), ':', '\n');
-                if (ret < 0)
-                {
-                    throw avtools::MediaError("Unable to serialize muxer private options", ret);
-                }
-                LOG4CXX_DEBUG(logger, "Available muxer private options:\n" << buf.get());
-            }
+            printContextOptions(formatCtx_.get(), muxerOpts);
 #endif
 
             // Open IO Context for writing to the file
@@ -400,7 +429,10 @@ namespace avtools
             // Set the timebase
             //get frame rate
             AVRational framerate;
-            assert(muxerOpts.has("framerate"));
+            if ( !muxerOpts.has("framerate") )
+            {
+                throw MediaError("Unable to find frame rate in muxer options");
+            }
             ret = av_parse_video_rate(&framerate, muxerOpts["framerate"].c_str());
             if (ret < 0)
             {
@@ -410,7 +442,10 @@ namespace avtools
             codecCtx_->time_base = av_inv_q(framerate);;                    // Set timebase
             LOG4CXX_DEBUG(logger, "Setting time base to " << codecCtx_->time_base);
 
-            assert(codecOpts.has("pixel_format"));
+            if ( !codecOpts.has("pixel_format") )
+            {
+                throw MediaError("Unable to find pixel format in codec options");
+            }
             int losses = 0;
             AVPixelFormat fmt = av_get_pix_fmt(codecOpts["pixel_format"].c_str());
             codecCtx_->pix_fmt = avcodec_find_best_pix_fmt_of_list(pEncoder->pix_fmts, fmt, false, &losses);
@@ -428,22 +463,7 @@ namespace avtools
             assert( codecCtx_.isOpen() );
             LOG4CXX_DEBUG(logger, "MediaWriter: Opened encoder for " << codecCtx_.info());
 #ifndef NDEBUG
-            LOG4CXX_DEBUG(logger, "Unused codec options:\n" << codecOpts);
-            {
-                avtools::CharBuf buf;
-                ret = av_opt_serialize(codecCtx_.get(), AV_OPT_FLAG_ENCODING_PARAM, 0, &buf.get(), ':', '\n');
-                if (ret < 0)
-                {
-                    throw avtools::MediaError("Unable to serialize codec options", ret);
-                }
-                LOG4CXX_DEBUG(logger, "Available codec options:\n" << buf.get());
-                ret = av_opt_serialize(codecCtx_->priv_data, AV_OPT_FLAG_ENCODING_PARAM, 0, &buf.get(), ':', '\n');
-                if (ret < 0)
-                {
-                    throw avtools::MediaError("Unable to serialize private codec options", ret);
-                }
-                LOG4CXX_DEBUG(logger, "Available codec private options:\n" << buf.get());
-            }
+            printContextOptions(codecCtx_.get(), codecOpts);
 #endif
 
             // Add stream
@@ -561,6 +581,8 @@ namespace avtools
                 LOG4CXX_DEBUG(logger, "Writer reading frames from filtergraph");
                 av_frame_unref(filtFrame_.get());
                 avtools::TimeBaseType outTimebase = av_buffersink_get_time_base(pOut_->filter_ctx);
+                assert(filtFrame_);
+                av_frame_unref(filtFrame_.get());
                 ret = av_buffersink_get_frame(pOut_->filter_ctx, filtFrame_.get());
                 if ( (ret == AVERROR(EAGAIN)) || (ret == AVERROR_EOF) )
                 {
@@ -608,7 +630,7 @@ namespace avtools
 
     const AVStream* MediaWriter::getStream() const
     {
-        assert(pImpl_);
+        assert( pImpl_ );
         return pImpl_->stream();
     }
 
@@ -640,7 +662,7 @@ namespace avtools
 
     std::string MediaWriter::url() const
     {
-        assert(pImpl_);
+        assert( pImpl_ );
         return pImpl_->url();
     }
 

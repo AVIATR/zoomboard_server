@@ -5,9 +5,12 @@
         {
             "framerate": "15/1",
             "strict": "normal",
+            "max_delay": "66000",
+            "analyzeduration": "1000000",
+            "flush_packets": "1",
             "hls_time": "0.1",
             "hls_allow_cache": "0",
-            "hls_flags": "+temp_file+delete_segments",
+            "hls_flags": "temp_file+delete_segments+independent_segments",
             "hls_list_size": "20",
             "hls_delete_threshold": "1"
         },
@@ -15,18 +18,21 @@
         {
             "name": "h264",
             "video_size": "384x216",
-            "pixel_format": "yuv422p",
-            "b" : "256000",
+            "pixel_format": "yuv420p",
+            "b" : "512000",
             "crf": "23",
             "qmin": "2",
             "qmax": "69",
             "qdiff": "4",
-            "flags": "+cgop+low_delay+qscale",
-            "g": "4",
+            "flags": "cgop+low_delay+qscale",
+            "g": "15",
+            "bframes": "0",
+            "intra-refresh": "0",
+            "refs": "1",
             "me_range": "16",
             "strict": "normal",
-            "level": "5.0",
-            "profile": "high422",
+            "level": "4.2",
+            "profile": "high",
             "preset": "ultrafast",
             "tune": "zerolatency"
         }
@@ -35,11 +41,14 @@
     {
         "muxer_options":
         {
-            "framerate": "3/1",
+            "framerate": "5/1",
             "strict": "normal",
-            "hls_time": "1.0",
+            "max_delay": "200000",
+            "analyzeduration": "200000",
+            "flush_packets": "1",
+            "hls_time": "1",
             "hls_allow_cache": "0",
-            "hls_flags": "+temp_file+delete_segments",
+            "hls_flags": "temp_file+delete_segments+independent_segments",
             "hls_list_size": "10",
             "hls_delete_threshold": "1"
         },
@@ -47,20 +56,24 @@
         {
             "name": "h264",
             "video_size": "848x480",
-            "pixel_format": "yuv422p",
-            "b" : "500000",
-            "crf": "23",
+            "pixel_format": "yuv420p",
+            "crf": "18",
             "qmin": "2",
             "qmax": "51",
             "qdiff": "4",
-            "flags": "+cgop+low_delay+qscale",
-            "g": "4",
-            "me_range": "16",
+            "flags": "cgop+low_delay+qscale",
+            "g": "5",
+            "bframes": "0",
             "strict": "normal",
-            "level": "5.0",
-            "profile": "high422",
+            "level": "4.2",
+            "profile": "high",
             "preset": "ultrafast",
-            "tune": "zerolatency"
+            "tune": "zerolatency",
+            "me_range": "16",
+            "b" : "3000000",
+            "rc-lookahead": "3",
+            "intra-refresh": "0",
+            "refs": "1"
         }
     }
 }

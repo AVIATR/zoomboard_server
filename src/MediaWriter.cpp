@@ -579,7 +579,6 @@ namespace avtools
             while (true)
             {
                 LOG4CXX_DEBUG(logger, "Writer reading frames from filtergraph");
-                av_frame_unref(filtFrame_.get());
                 avtools::TimeBaseType outTimebase = av_buffersink_get_time_base(pOut_->filter_ctx);
                 assert(filtFrame_);
                 av_frame_unref(filtFrame_.get());

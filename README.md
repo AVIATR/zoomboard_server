@@ -90,7 +90,7 @@ and replace `<stream.m3u8>` with the name of the particular output stream playli
 * To play with minimal buffering and display frame info, use: `ffplay -vf "[in]drawtext=text='time=%{localtime}':box=1:x=(w-tw)/2:y=2*lh, drawtext=text='frame=%{n}, ts=%{pts\:hms}':box=1:x=(w-tw)/2:y=h-(2*lh)" -fflags nobuffer <stream.m3u8>`
 * As comparison, ffmpeg can also be used to generate the stream. The following command uses ffmpeg to create a stream from a Macbook webcam at 5 frames/sec:
 ```
-ffmpeg -f avfoundation -r 30 -s 848x480 -i 0 -f hls -hls_time 0.1 -hls_allow_cache 0 -hls_flags temp_file+delete_segments+independent_segments -hls_delete_threshold 1 -hls_list_size 30 -c:v libx264 -crf 18 -flags +cgop+low_delay+qscale -r 5 -g 5 -refs 1 -strict normal -level 4.2 -profile:v high -preset ultrafast -tune zerolatency -pix_fmt yuv420p -vf "[in]drawtext=text='time=%{localtime}':box=1:x=(w-tw)/2:y=2*lh, drawtext=text='frame=%{n}, ts=%{pts\:hms}':box=1:x=(w-tw)/2:y=(3*lh)" <stream.m3u8>
+ffmpeg -f avfoundation -r 30 -s 848x480 -i 0 -f hls -hls_time 1 -hls_allow_cache 0 -hls_flags temp_file+delete_segments+independent_segments -hls_delete_threshold 1 -hls_list_size 30 -c:v libx264 -crf 18 -flags +cgop+low_delay+qscale -r 5 -g 5 -refs 1 -strict normal -level 4.2 -profile:v high -preset ultrafast -tune zerolatency -pix_fmt yuv420p -vf "[in]drawtext=text='time=%{localtime}':box=1:x=(w-tw)/2:y=2*lh, drawtext=text='frame=%{n}, ts=%{pts\:hms}':box=1:x=(w-tw)/2:y=(3*lh)" /tmp/zoombrd/test.m3u8
 ```
 where `<stream.m3u8>` should be replaced with the location and actual filename of the stream playlist
 

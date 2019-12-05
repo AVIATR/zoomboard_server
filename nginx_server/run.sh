@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/bin/sh
 set -e
 
 STREAM_FOLDER=$(pwd)
@@ -8,11 +8,11 @@ function USAGE {
 #remove any old files
 while getopts ":hs:" opt; do
     case ${opt} in
-        h ) # process option a
+        h ) # process help request
             USAGE
             ;;
         
-        s ) # process option t
+        s ) # process option s
             STREAM_FOLDER=${OPTARG}
             ;;
         

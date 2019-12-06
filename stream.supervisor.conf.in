@@ -1,9 +1,9 @@
 # The minimal Supervisord configuration for running the live stream.
 [program:serve]
-command=/home/pi/stream.sh
+command=@CMAKE_INSTALL_PREFIX@/stream.sh
 process_name=%(program_name)s
 numprocs=1
-directory=/home/pi
+directory=@CMAKE_INSTALL_PREFIX@
 autostart=true
 autorestart=true
 user=pi

@@ -32,7 +32,7 @@ set_target_properties( ${TARGET_NAME}
     PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
     )
-install(TARGETS ${TARGET_NAME} RUNTIME DESTINATION bin)
+install(TARGETS ${TARGET_NAME} RUNTIME DESTINATION .)
 
 #Set up calibration executable
 set(TARGET_NAME "calibrate_camera")
@@ -49,7 +49,7 @@ set_target_properties( ${TARGET_NAME}
     PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
     )
-install(TARGETS ${TARGET_NAME} RUNTIME DESTINATION bin)
+install(TARGETS ${TARGET_NAME} RUNTIME DESTINATION .)
 
 #Set up main executable
 set(TARGET_NAME ${PROJECT_NAME})
@@ -67,8 +67,7 @@ set_target_properties( ${TARGET_NAME}
     PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
     )
-install(TARGETS ${TARGET_NAME} RUNTIME DESTINATION bin)
-
+install(TARGETS ${TARGET_NAME} RUNTIME DESTINATION .)
 #Copy any previously avilable calibration files
 #file(GLOB CAMERA_CALIBRATION_FILES "${RESOURCE_FOLDER}/*.json")
 #message(STATUS "Found calibration files: ${CAMERA_CALIBRATION_FILES}")
@@ -89,5 +88,3 @@ add_custom_command(
     COMMAND ${CMAKE_COMMAND}
     ARGS -E copy "${RESOURCE_FOLDER}/${CMAKE_SYSTEM_NAME}/*.json" "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}"
 )
-
-message(STATUS "Files will be installed to ${CMAKE_INSTALL_PREFIX}")

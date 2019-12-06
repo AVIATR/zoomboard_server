@@ -381,3 +381,6 @@ To test that the stream is a valid AVFoundation stream, just open the stream url
 * wpredp:
 * x264-params:
 * x264opts:
+
+### TO DO
+* Move files to ram disk to save SD card life: https://www.raspberrypi.org/forums/viewtopic.php?t=226425

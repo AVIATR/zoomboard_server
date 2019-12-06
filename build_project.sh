@@ -1,10 +1,11 @@
 #!/bin/bash
 export PROJ_NAME="zoomboard_server"
 function usage {
-    echo "Usage: $0 [-x] [-h] [-b config] [build_dir]"
+    echo "Usage: $0 [-x] [-h] [-c config] [-i install_dir] [build_dir]"
     echo " -x               Create xcode project. By default, a make project is created."
     echo " -h               This help message."
-    echo " -b config        Builds the project binaries after the project is built; config is either 'Release' or 'Debug'"
+    echo " -c config        Builds the project binaries after the project is built; config is either 'Release' or 'Debug'"
+    echo " -i install_dir   Builds the binaries after the project is configured & installs the outputs in install_dir" 
     echo " build_dir        Name of folder to put the build files in. Default is 'build'."
 }
 
@@ -13,7 +14,9 @@ function error {
     exit 1
 }
 
-while getopts ":hxb:" opt; do
+CONFIG=Debug
+
+while getopts ":hxc:i:" opt; do
     case ${opt} in
         h )
             usage
@@ -22,8 +25,11 @@ while getopts ":hxb:" opt; do
         x )
             ARGS+=(-G Xcode)
             ;;
-        b )
+        c )
             CONFIG=$OPTARG
+            ;;
+        i )
+            INSTALL_DIR=$OPTARG
             ;;
         \? )
             echo "Invalid option: $OPTARG" 1>&2
@@ -46,7 +52,12 @@ else
     TARGET_DIR="$@"    
 fi
 
-ARGS+=(-S $(pwd) -B "${TARGET_DIR}")
+ARGS+=(-S $(pwd) -B "${TARGET_DIR}" -DCMAKE_BUILD_TYPE=${CONFIG})
+
+if [ -n ${INSTALL_DIR} ]; then
+    echo "Setting installation folder to ${INSTALL_DIR}."
+    ARGS+=(-DCMAKE_INSTALL_PREFIX=${INSTALL_DIR})
+fi
 
 #Cleanup or create target folder
 if [[ -e "${TARGET_DIR}" ]]; then
@@ -59,14 +70,14 @@ if [[ -e "${TARGET_DIR}" ]]; then
         exit 0
     fi
 fi
-mkdir "${TARGET_DIR}"
+mkdir -p "${TARGET_DIR}"
 
 #Build project
 echo "Configuring project..."
 cmake "${ARGS[@]}"
 
 #Build binaries if requested
-if [ -n "$CONFIG" ]; then
+if [ -n ${INSTALL_DIR} ]; then
     case "$CONFIG" in
         Release|Debug )
             echo "Building binaries..."

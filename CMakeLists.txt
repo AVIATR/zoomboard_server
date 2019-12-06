@@ -98,12 +98,33 @@ set(RESOURCE_FOLDER "${CMAKE_SOURCE_DIR}/res")
 #if (${CMAKE_SYSTEM_NAME} STREQUAL "Darwin") #Macos
 if (${CMAKE_SYSTEM_NAME} STREQUAL "Linux") #Linux
     set(CMAKE_CXX_FLAGS "-Wl,-latomic") #workaround an issue with opencv on rpi - https://github.com/opencv/opencv/issues/15278
+    configure_file(
+        "stream.supervisor.conf.in"
+        "stream.supervisor.conf"
+        @ONLY
+    )
+    install(FILES "${CMAKE_CURRENT_BINARY_DIR}/stream.supervisor.conf" DESTINATION .)
 endif()
 
 ###################################
 #Add source folder
 ###################################
 add_subdirectory("src")
+
+###################################
+#Install outputs
+###################################
+#file(GLOB_RECURSE RES_FILES "${RESOURCE_FOLDER}/*.json")
+message(STATUS "Files will be installed to ${CMAKE_INSTALL_PREFIX}")
+file(GLOB RES_FILES "${RESOURCE_FOLDER}/*.json")
+file(GLOB PLATFORM_RES_FILES "${RESOURCE_FOLDER}/${CMAKE_SYSTEM_NAME}/*.json")
+message(STATUS "Resource files to install: ${RES_FILES};${PLATFORM_RES_FILES}")
+install(FILES ${RES_FILES} ${PLATFORM_RES_FILES} DESTINATION .)
+set(SCRIPT_FILES "${CMAKE_SOURCE_DIR}/play.sh;${CMAKE_SOURCE_DIR}/stream.sh;${CMAKE_SOURCE_DIR}/nginx/launch_nginx_docker.sh")
+message(STATUS "Script files to install: ${SCRIPT_FILES}")
+install(PROGRAMS ${SCRIPT_FILES} DESTINATION .)
+install(FILES "${CMAKE_SOURCE_DIR}/nginx/index.html" DESTINATION html)
+install(FILES "${CMAKE_SOURCE_DIR}/nginx/nginx.conf" DESTINATION .)
 
 # CPack packaging
 include(InstallRequiredSystemLibraries)

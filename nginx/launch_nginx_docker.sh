@@ -3,13 +3,14 @@ set -e
 
 STREAM_FOLDER=$(pwd)
 function USAGE {
-    echo "Usage: run.sh [-h] [-s stream_folder]"
+    echo "Usage: $0 [-h] [-s stream_folder]"
 }
 #remove any old files
 while getopts ":hs:" opt; do
     case ${opt} in
         h ) # process help request
             USAGE
+            exit 0
             ;;
         
         s ) # process option s
@@ -29,8 +30,8 @@ echo "Stream folder is ${STREAM_FOLDER}"
 #launch nginx server
 docker run -d --rm --name zoombrd \
     -v$(pwd)/nginx.conf:/etc/nginx/nginx.conf \
-    -v$(pwd)/html:/usr/share/nginx/html \
-    -v"${STREAM_FOLDER}":/usr/share/nginx/hls \
+    -v$(pwd)/html:/tmp/zoombrd/html \
+    -v"${STREAM_FOLDER}":/tmp/zoombrd/hls \
     -p8080:8080 \
     tiangolo/nginx-rtmp
 

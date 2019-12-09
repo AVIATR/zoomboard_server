@@ -19,10 +19,19 @@ To install the dependencies on Raspbian:
   
 Unfortunately, the version of OpenCV that is in the repos does not come with Aruco. It is recommended that OpenCV be built from scratch. To do this, refer to the instructions [here](https://www.learnopencv.com/install-opencv-4-on-raspberry-pi/).
 
-## Configuration file
-This json file provides the necessary configuration options (input device, resolution, frame rate, other ffmpeg options). as well as the output url and options. For details about the input device options, see the [ffmpeg faq about capture devices](https://trac.ffmpeg.org/wiki/Capture/Webcam).
+## Building zoomboard\_server
+To build and install the code, use the `build_project.sh` script. The usage is
 
-## Calibration
+    ./build_project.sh [-c config] [-i install_dir] [-w www_dir] [-b] build_dir
+
+where `config` is either `Release` or `Debug`. `install_dir` is the folder where all the output files will be placed, and `www_dir` is the root of the folder where the web-related files will be placed (i.e., the streams will be placed in `www_dir/hls`). The `build_dir` is the folder where the build files will be placed. If you pass the `-b` flag, the code will also build & install the output files, otherwise the build files are configured and placed in `build_dir`, after which you can go into that folder and use the build & install commands for your local build tools manually. For more detail, run `./build_project.sh -h`.
+
+### Configuration files
+This json files provide the necessary configuration options (input device, resolution, frame rate, other ffmpeg options). as well as the output url and options. For details about the input device options, see the [ffmpeg faq about capture devices](https://trac.ffmpeg.org/wiki/Capture/Webcam).
+
+##Running zoomboard\_server
+All necessary files will be placed in the above defined `install_dir`
+### Calibration
 The system is set up initially by creating the markers, using the `create_markers` executable. To run, simply use
 
     ./create_markers <marker_file.json>
@@ -33,16 +42,16 @@ where `marker_file.json` is a json file to save the markers to. This also saves 
 
 where `marker_file.json` is the output of the `create_markers` process, and `calibration_file.json` is the output of camera calibration that contains the calibration matrix and distortion coefficients.
 
-## Local testing of the server
-The zoomboard server is started via
+### Local testing of the server
+The zoomboard server can be started via
 
     ./zoomboard_server -i <input> -o <output>
     
-where the `<input>` and `<output>` can be media files or preferably .json files that have information re: input/output parameters to use if non-default values are to be used. To see how these files are set up, look at the example `input.json` and `output.json` files.
+where the `<input>` and `<output>` can be media files or preferably .json files that have information re: input/output parameters to use if non-default values are to be used. To see how these files are set up, look at the example `input.json` and `output.json` files. Alternatively, you can use the `stream.sh` script to start and ffmpeg-based stream.
 
-The nginx server can be started using the script in the nginx folder. The usage is
+The nginx server can be started using
 
-    ./run.sh -s <stream_folder>
+    ./launch_nginx_server.sh
 
 where `stream_folder` is the folder where the server is putting the stream files. The streams can then be played via ffplay:
 

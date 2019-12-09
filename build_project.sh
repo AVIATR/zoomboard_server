@@ -1,12 +1,15 @@
 #!/bin/bash
 export PROJ_NAME="zoomboard_server"
 function usage {
-    echo "Usage: $0 [-h] [-x] [-c config] [-w www_dir] [-i install_dir] [build_dir]"
+    echo "Usage: $0 [-h] [-x] [-b] [-c config] [-w www_dir] [-i install_dir] [build_dir]"
     echo " -h               This help message."
     echo " -x               Create xcode project. By default, a make project is created."
-    echo " -w www_dir.      Sets the root folder where web-served files will be created. Streams will be in www_dir/hls. Default is /tmp/zoombrd"
-    echo " -c config        Builds the project binaries after the project is built; config is either 'Release' or 'Debug'"
-    echo " -i install_dir   Builds the binaries after the project is configured & installs the outputs in install_dir"
+    echo " -b               Builds & installs the project outputs."
+    echo " -c config        Sets the build configuration, either 'Release' or 'Debug'."
+    echo "                  Default is 'Debug'."
+    echo " -w www_dir       Sets the root folder where web-served files will be created."
+    echo "                  Streams will be in www_dir/hls. Default is '/tmp/zoombrd'"
+    echo " -i install_dir   Sets the installation folder to install_dir"
     echo " build_dir        Name of folder to put the build files in. Default is 'build'."
 }
 
@@ -15,9 +18,12 @@ function error {
     exit 1
 }
 
+#Defaults
 CONFIG=Debug
+BUILD_DIR='build'
+DO_BUILD=no
 
-while getopts ":hxc:i:" opt; do
+while getopts ":hxbc:i:" opt; do
     case ${opt} in
         h )
             usage
@@ -25,6 +31,9 @@ while getopts ":hxc:i:" opt; do
             ;;
         x )
             ARGS+=(-G Xcode)
+            ;;
+        b )
+            DO_BUILD=yes
             ;;
         c )
             CONFIG=$OPTARG
@@ -35,7 +44,7 @@ while getopts ":hxc:i:" opt; do
             ;;
         i )
             INSTALL_DIR=$OPTARG
-            echo "Setting installation folder to ${INSTALL_DIR}."
+            echo "Setting installation folder to ${INSTALL_DIR}"
             ARGS+=(-DCMAKE_INSTALL_PREFIX=${INSTALL_DIR})
             ;;
         \? )
@@ -60,6 +69,7 @@ else
 fi
 
 ARGS+=(-S $(pwd) -B "${TARGET_DIR}" -DCMAKE_BUILD_TYPE=${CONFIG})
+echo "Build files will be placed in ${TARGET_DIR}"
 
 #Cleanup or create target folder
 if [[ -e "${TARGET_DIR}" ]]; then
@@ -79,10 +89,10 @@ echo "Configuring project..."
 cmake "${ARGS[@]}"
 
 #Build & install binaries if requested
-if [ -n ${INSTALL_DIR} ]; then
+if [ ${DO_BUILD} == yes ]; then
     case "$CONFIG" in
         Release|Debug )
-            echo "Building binaries..."
+            echo "Building & installing binaries..."
             cmake --build "$TARGET_DIR" --config $CONFIG -j4 --target install
             ;;
         * )

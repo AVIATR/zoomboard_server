@@ -1,12 +1,12 @@
 {
-    "/tmp/zoombrd/stream.m3u8":
+    "@WWW_DIR@/hls/stream_hr.m3u8":
     {
         "muxer_options":
         {
-            "framerate": "5/1",
+            "framerate": "3/1",
             "strict": "normal",
-            "max_delay": "200000",
-            "analyzeduration": "200000",
+            "max_delay": "350000",
+            "analyzeduration": "350000",
             "flush_packets": "1",
             "hls_time": "1",
             "hls_allow_cache": "0",
@@ -17,14 +17,14 @@
         "codec_options": 
         {
             "name": "h264",
-            "video_size": "848x480",
+            "video_size": "@DEFAULT_FULL_RESOLUTION@",
             "pixel_format": "yuv420p",
             "crf": "18",
             "qmin": "2",
             "qmax": "51",
             "qdiff": "4",
             "flags": "cgop+low_delay+qscale",
-            "g": "5",
+            "g": "3",
             "bframes": "0",
             "strict": "normal",
             "level": "4.2",
@@ -32,7 +32,9 @@
             "preset": "ultrafast",
             "tune": "zerolatency",
             "me_range": "16",
-            "b" : "3000000",
+            "b" : "5000k",
+            "maxrate" : "10000k",
+            "bufsize": "5000k",
             "rc-lookahead": "3",
             "intra-refresh": "0",
             "refs": "1"

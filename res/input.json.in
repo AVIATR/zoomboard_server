@@ -1,11 +1,11 @@
 {
-    "/dev/video0":
+    "@INPUT_DEVICE@":
     {
         "muxer_options":
         {
-            "name" : "v4l2",
+            "name" : "@MUXER@",
             "framerate": "30/1",
-            "video_size": "1920x1080",
+            "video_size": "@DEFAULT_FULL_RESOLUTION@",
             "pixel_format": "rgb24"
         },
         "codec_options":

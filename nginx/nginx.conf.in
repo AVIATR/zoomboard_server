@@ -13,11 +13,11 @@ http {
         listen 8080;
         autoindex off;
         location / {
-            root /tmp/zoombrd/html/;
+            root @WWW_DIR@/html/;
             index index.html index.htm;
         }
         location /hls {
-            root /tmp/zoombrd/;
+            root @WWW_DIR@/;
             # Disable cache
             add_header Cache-Control no-cache;
 

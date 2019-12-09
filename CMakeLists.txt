@@ -19,6 +19,11 @@ if(NOT DEFINED CMAKE_BUILD_TYPE)
 elseif (CMAKE_BUILD_TYPE STREQUAL "")
     set(CMAKE_BUILD_TYPE "Debug")
 endif()
+
+if(NOT DEFINED WWW_DIR)
+    set(WWW_DIR "/tmp/zoombrd")
+endif()
+
 cmake_minimum_required(VERSION 3.5)
 
 message(STATUS "CMAKE_BINARY_DIR= ${CMAKE_BINARY_DIR}")
@@ -95,8 +100,14 @@ message(STATUS "BUilding for platform = ${CMAKE_SYSTEM_NAME}")
 set(RESOURCE_FOLDER "${CMAKE_SOURCE_DIR}/res")
 #configure_file("${RESOURCE_FOLDER}/${CMAKE_SYSTEM_NAME}/input.json" "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/input.json" COPYONLY)
 #configure_file("${RESOURCE_FOLDER}/${CMAKE_SYSTEM_NAME}/output.json" "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/output.json" COPYONLY)
-#if (${CMAKE_SYSTEM_NAME} STREQUAL "Darwin") #Macos
-if (${CMAKE_SYSTEM_NAME} STREQUAL "Linux") #Linux
+if (${CMAKE_SYSTEM_NAME} STREQUAL "Darwin") #Macos - assume default cam is built-in facetime camera
+    set(INPUT_DEVICE "0")
+    set(MUXER "avfoundation")
+    set(DEFAULT_FULL_RESOLUTION "848x480")
+elseif (${CMAKE_SYSTEM_NAME} STREQUAL "Linux") #RaspberryPi - assume default cam is Logitech 930
+    set(INPUT_DEVICE "/dev/video0")
+    set(MUXER "v4l2")
+    set(DEFAULT_FULL_RESOLUTION "1920x1080")
     set(CMAKE_CXX_FLAGS "-Wl,-latomic") #workaround an issue with opencv on rpi - https://github.com/opencv/opencv/issues/15278
     configure_file(
         "stream.supervisor.conf.in"
@@ -105,26 +116,34 @@ if (${CMAKE_SYSTEM_NAME} STREQUAL "Linux") #Linux
     )
     install(FILES "${CMAKE_CURRENT_BINARY_DIR}/stream.supervisor.conf" DESTINATION .)
 endif()
+set(DEFAULT_LOW_RESOLUTION "384x216")
 
 ###################################
-#Add source folder
+#Add subfolders
 ###################################
-add_subdirectory("src")
+add_subdirectory("res") #resources
+add_subdirectory("nginx") #nginxs
+add_subdirectory("src") #source code
 
 ###################################
 #Install outputs
 ###################################
-#file(GLOB_RECURSE RES_FILES "${RESOURCE_FOLDER}/*.json")
 message(STATUS "Files will be installed to ${CMAKE_INSTALL_PREFIX}")
-file(GLOB RES_FILES "${RESOURCE_FOLDER}/*.json")
-file(GLOB PLATFORM_RES_FILES "${RESOURCE_FOLDER}/${CMAKE_SYSTEM_NAME}/*.json")
-message(STATUS "Resource files to install: ${RES_FILES};${PLATFORM_RES_FILES}")
-install(FILES ${RES_FILES} ${PLATFORM_RES_FILES} DESTINATION .)
-set(SCRIPT_FILES "${CMAKE_SOURCE_DIR}/play.sh;${CMAKE_SOURCE_DIR}/stream.sh;${CMAKE_SOURCE_DIR}/nginx/launch_nginx_docker.sh")
+#file(GLOB_RECURSE RES_FILES "${RESOURCE_FOLDER}/*.json")
+#file(GLOB RES_FILES "${RESOURCE_FOLDER}/*.json")
+#file(GLOB PLATFORM_RES_FILES "${RESOURCE_FOLDER}/${CMAKE_SYSTEM_NAME}/*.json")
+#message(STATUS "Resource files to install: ${RES_FILES};${PLATFORM_RES_FILES}")
+#install(FILES ${RES_FILES} ${PLATFORM_RES_FILES} DESTINATION .)
+
+#Configure & install scripts
+configure_file(
+    "stream.sh.in"
+    "stream.sh"
+    @ONLY
+)
+set(SCRIPT_FILES "${CMAKE_SOURCE_DIR}/play.sh;${CMAKE_CURRENT_BINARY_DIR}/stream.sh")
 message(STATUS "Script files to install: ${SCRIPT_FILES}")
 install(PROGRAMS ${SCRIPT_FILES} DESTINATION .)
-install(FILES "${CMAKE_SOURCE_DIR}/nginx/index.html" DESTINATION html)
-install(FILES "${CMAKE_SOURCE_DIR}/nginx/nginx.conf" DESTINATION .)
 
 # CPack packaging
 include(InstallRequiredSystemLibraries)

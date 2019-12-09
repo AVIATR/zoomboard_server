@@ -69,9 +69,6 @@ set_target_properties( ${TARGET_NAME}
     )
 install(TARGETS ${TARGET_NAME} RUNTIME DESTINATION .)
 #Copy any previously avilable calibration files
-#file(GLOB CAMERA_CALIBRATION_FILES "${RESOURCE_FOLDER}/*.json")
-#message(STATUS "Found calibration files: ${CAMERA_CALIBRATION_FILES}")
-#file(COPY ${CAMERA_CALIBRATION_FILES} DESTINATION "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}")
 add_custom_command(
     TARGET ${PROJECT_NAME}
     POST_BUILD
@@ -82,9 +79,9 @@ add_custom_command(
 #Copy io specification files
 #file(GLOB IO_SPEC_FILES "${RESOURCE_FOLDER}/${CMAKE_SYSTEM_NAME}/*.json")
 #file(COPY ${IO_SPEC_FILES} DESTINATION "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}")
-add_custom_command(
-    TARGET ${PROJECT_NAME}
-    POST_BUILD
-    COMMAND ${CMAKE_COMMAND}
-    ARGS -E copy "${RESOURCE_FOLDER}/${CMAKE_SYSTEM_NAME}/*.json" "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}"
-)
+#add_custom_command(
+#    TARGET ${PROJECT_NAME}
+#    POST_BUILD
+#    COMMAND ${CMAKE_COMMAND}
+#    ARGS -E copy "${CMAKE_CURRENT_BINARY_DIR}/*.json" "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}"
+#)

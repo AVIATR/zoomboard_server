@@ -1,0 +1,11 @@
+#!/bin/sh
+set -e
+echo "web folder is @WWW_DIR@"
+#launch nginx server
+docker run -d --rm --name zoombrd \
+    -v$(pwd)/nginx.conf:/etc/nginx/nginx.conf \
+    -v"@WWW_DIR@":"@WWW_DIR@" \
+    -p8080:8080 \
+    tiangolo/nginx-rtmp
+
+#to access the stream, the url is http://127.0.0.1:8080/hls/stream.m3u8

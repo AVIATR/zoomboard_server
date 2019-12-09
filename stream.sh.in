@@ -1,12 +1,20 @@
 #!/bin/sh
 
 #Make output folder & remove old files
-mkdir -p @WWW_DIR@
-mkdir @WWW_DIR@/html/
-rm -rf @WWW_DIR@/html/*
-mkdir @WWW_DIR@/hls/
-rm -rf @WWW_DIR@/hls/*
+#Cleanup or create WWW_DIR folder
+if [[ -e "@WWW_DIR@" ]]; then
+    read -p "@WWW_DIR@ exists, and will be removed. Are you sure (y/n)? " CHOICE
+    echo    #move to a new line
+    if [[ $CHOICE =~ ^[Yy]$ ]]; then
+        rm -rf "@WWW_DIR@"
+    else
+        echo "Exiting without starting stream."
+        exit 0
+    fi
+fi
+mkdir -p @WWW_DIR@/html
 cp html/index.html @WWW_DIR@/html/
+mkdir @WWW_DIR@/hls/
 
 #start streaming
-ffmpeg -f @MUXER@ -s @DEFAULT_FULL_RESOLUTION@ -r 30 -i @INPUT_DEVICE@ -f hls -hls_time 0.3 -hls_allow_cache 0 -hls_flags temp_file+delete_segments+independent_segments -hls_delete_threshold 1 -hls_list_size 60 -c:v libx264 -b:v 7000k -maxrate 10000k -crf 18 -flags +cgop+low_delay+qscale -r 15 -g 15 -refs 1 -strict normal -level 4.2 -profile:v high -preset ultrafast -tune zerolatency -pix_fmt yuv420p -vf "[in]drawtext=text='time=%{localtime}':box=1:x=(w-tw)/2:y=2*lh, drawtext=text='frame=%{n}, ts=%{pts\:hms}':box=1:x=(w-tw)/2:y=(3*lh)" @WWW_DIR@/hls/stream.m3u8
+ffmpeg -f @MUXER@ -s @DEFAULT_FULL_RESOLUTION@ -r 30 -i @INPUT_DEVICE@ -f hls -hls_time 0.3 -hls_allow_cache 0 -hls_flags temp_file+delete_segments+independent_segments -hls_delete_threshold 1 -hls_list_size 60 -c:v libx264 -b:v 7000k -maxrate 10000k -crf 18 -flags +cgop+low_delay+qscale -r 15 -g 15 -refs 1 -strict normal -level 4.2 -profile:v high -preset ultrafast -tune zerolatency -pix_fmt yuv420p -vf "[in]drawtext=text='time=%{localtime}':box=1:x=(w-tw)/2:y=2*lh, drawtext=text='frame=%{n}, ts=%{pts\:hms}':box=1:x=(w-tw)/2:y=(3*lh)" @WWW_DIR@/hls/stream_hr.m3u8

@@ -1,11 +1,12 @@
 #!/bin/bash
 export PROJ_NAME="zoomboard_server"
 function usage {
-    echo "Usage: $0 [-x] [-h] [-c config] [-i install_dir] [build_dir]"
-    echo " -x               Create xcode project. By default, a make project is created."
+    echo "Usage: $0 [-h] [-x] [-c config] [-w www_dir] [-i install_dir] [build_dir]"
     echo " -h               This help message."
+    echo " -x               Create xcode project. By default, a make project is created."
+    echo " -w www_dir.      Sets the root folder where web-served files will be created. Streams will be in www_dir/hls. Default is /tmp/zoombrd"
     echo " -c config        Builds the project binaries after the project is built; config is either 'Release' or 'Debug'"
-    echo " -i install_dir   Builds the binaries after the project is configured & installs the outputs in install_dir" 
+    echo " -i install_dir   Builds the binaries after the project is configured & installs the outputs in install_dir"
     echo " build_dir        Name of folder to put the build files in. Default is 'build'."
 }
 
@@ -28,8 +29,14 @@ while getopts ":hxc:i:" opt; do
         c )
             CONFIG=$OPTARG
             ;;
+        w )
+            WWW_DIR=$OPT_ARG
+            ARGS+=(-DWWW_DIR=${WWW_DIR})
+            ;;
         i )
             INSTALL_DIR=$OPTARG
+            echo "Setting installation folder to ${INSTALL_DIR}."
+            ARGS+=(-DCMAKE_INSTALL_PREFIX=${INSTALL_DIR})
             ;;
         \? )
             echo "Invalid option: $OPTARG" 1>&2
@@ -54,11 +61,6 @@ fi
 
 ARGS+=(-S $(pwd) -B "${TARGET_DIR}" -DCMAKE_BUILD_TYPE=${CONFIG})
 
-if [ -n ${INSTALL_DIR} ]; then
-    echo "Setting installation folder to ${INSTALL_DIR}."
-    ARGS+=(-DCMAKE_INSTALL_PREFIX=${INSTALL_DIR})
-fi
-
 #Cleanup or create target folder
 if [[ -e "${TARGET_DIR}" ]]; then
     read -p "${TARGET_DIR} exists, and will be removed. Are you sure (y/n)? " CHOICE
@@ -76,12 +78,12 @@ mkdir -p "${TARGET_DIR}"
 echo "Configuring project..."
 cmake "${ARGS[@]}"
 
-#Build binaries if requested
+#Build & install binaries if requested
 if [ -n ${INSTALL_DIR} ]; then
     case "$CONFIG" in
         Release|Debug )
             echo "Building binaries..."
-            cmake --build "$TARGET_DIR" --config $CONFIG -j4
+            cmake --build "$TARGET_DIR" --config $CONFIG -j4 --target install
             ;;
         * )
             echo "Unknown build configuration: $CONFIG" 1>&2

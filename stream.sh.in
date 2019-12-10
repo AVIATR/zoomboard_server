@@ -1,37 +1,66 @@
 #!/bin/bash
+set -e
+function USAGE {
+    echo "Usage: stream.sh [-h] n"
+    echo " -h    This help text."
+    echo " n number of streams to create, either 1 or 2."
+}
 
-#Make output folder & remove old files
-#Cleanup or create WWW_DIR folder
-if [[ -e "@WWW_DIR@" ]]; then
-    read -p "@WWW_DIR@ exists, and will be removed. Are you sure (y/n)? " CHOICE
-    echo    #move to a new line
-    if [[ $CHOICE =~ ^[Yy]$ ]]; then
-        rm -rf "@WWW_DIR@"
-    else
-        echo "Exiting without starting stream."
-        exit 0
+function INIT {
+    #Cleanup or create WWW_DIR folder
+    if [[ -e "@WWW_DIR@" ]]; then
+        read -p "@WWW_DIR@ exists, and will be removed. Are you sure (y/n)? " CHOICE
+        echo    #move to a new line
+        if [[ $CHOICE =~ ^[Yy]$ ]]; then
+            rm -rf "@WWW_DIR@"
+        else
+            echo "Exiting without starting stream."
+            exit 0
+        fi
     fi
+    mkdir -p @WWW_DIR@/html
+    cp html/index.html @WWW_DIR@/html/
+    mkdir @WWW_DIR@/hls/
+}
+
+while getopts ":h" opt; do
+    case ${opt} in
+        h ) # process option h
+            USAGE
+            exit 0
+            ;;
+        \? )
+            echo "Invalid Option: -$OPTARG" 1>&2
+            USAGE
+            exit 1
+            ;;
+    esac
+done
+shift $((OPTIND -1))
+
+if (($# == 0))
+then
+    echo "No stream specified"
+    USAGE
+    exit 1
 fi
-mkdir -p @WWW_DIR@/html
-cp html/index.html @WWW_DIR@/html/
-mkdir @WWW_DIR@/hls/
 
-#start streaming
-#ffmpeg -f @MUXER@ -s @DEFAULT_FULL_RESOLUTION@ -r 30 -i @INPUT_DEVICE@ \
-#    -f hls -hls_time 0.35 -hls_allow_cache 0 -hls_flags temp_file+delete_segments+independent_segments \
-#        -hls_delete_threshold 1 -hls_list_size 20 -c:v libx264 -b:v 7000k -maxrate 10000k \
-#            -crf 18 -flags +cgop+low_delay+qscale -r 3 -g 3 -refs 1 -strict normal \
-#                -level 4.2 -profile:v high -preset ultrafast -tune zerolatency -pix_fmt yuv420p \
-#                    -vf "[in]drawtext=text='time=%{localtime}':box=1:x=(w-tw)/2:y=2*lh, drawtext=text='frame=%{n}, ts=%{pts\:hms}':box=1:x=(w-tw)/2:y=(3*lh)" \
- #                       @WWW_DIR@/hls/stream_hr.m3u8
+N_STREAMS=$@
 
-ffmpeg -f @MUXER@ -s @DEFAULT_FULL_RESOLUTION@ -r 30 -i @INPUT_DEVICE@ \
-        -map '[out_hr]' -f hls -hls_time 0.35 -hls_allow_cache 0 -hls_flags temp_file+delete_segments+independent_segments \
-            -hls_delete_threshold 1 -hls_list_size 12 -c:v libx264 -b:v 7000k -maxrate 10000k -crf 18 -flags +cgop+low_delay+qscale \
-                -r 3 -g 3 -refs 1 -strict normal -level 4.2 -profile:v high -preset ultrafast -tune zerolatency -pix_fmt yuv420p \
-                    @WWW_DIR@/hls/stream_hr.m3u8 \
-        -map '[out_lr]' -f hls -hls_time 0.1 -hls_allow_cache 0 -hls_flags temp_file+delete_segments+independent_segments \
-            -hls_delete_threshold 1 -hls_list_size 60 -c:v libx264 -s 384x216 -b:v 3000k -maxrate 5000k -crf 18 -flags +cgop+low_delay+qscale \
-                -r 15 -g 15 -refs 1 -strict normal -level 4.2 -profile:v high -preset ultrafast -tune zerolatency -pix_fmt yuv420p \
-                    @WWW_DIR@/hls/stream_lr.m3u8
-
+CMD="ffmpeg -f @MUXER@ -s @DEFAULT_FULL_RESOLUTION@ -r 30 -i @INPUT_DEVICE@"
+STR1="-f hls -hls_time 0.35 -hls_allow_cache 0 -hls_flags temp_file+delete_segments+independent_segments -hls_delete_threshold 1 -hls_list_size 6 -c:v libx264 -b:v 7000k -maxrate 10000k -bufsize 10000k -crf 18 -flags +cgop+low_delay+qscale -r 3 -g 3 -refs 1 -strict normal -level 4.2 -profile:v high -preset ultrafast -tune zerolatency -pix_fmt yuv420p @WWW_DIR@/hls/stream_hr.m3u8"
+STR2="-f hls -hls_time 0.35 -hls_allow_cache 0 -hls_flags temp_file+delete_segments+independent_segments -hls_delete_threshold 1 -hls_list_size 6 -c:v libx264 -s 384x216 -b:v 2000k -maxrate 5000k -bufsize 4000k -crf 18 -flags +cgop+low_delay+qscale -r 20 -g 20 -refs 1 -strict normal -level 4.2 -profile:v high -preset ultrafast -tune zerolatency -pix_fmt yuv420p  @WWW_DIR@/hls/stream_lr.m3u8"
+if [ ${N_STREAMS} == 1 ]
+then
+    echo "Streaming to @WWW_DIR@/hls/stream_hr.m3u8"
+    INIT
+    eval ${CMD} ${STR1}
+elif [ ${N_STREAMS} == 2 ]
+then
+    echo "Streaming to @WWW_DIR@/hls/stream_hr.m3u8 and @WWW_DIR@/hls/stream_lr.m3u8"
+    INIT
+    eval ${CMD} ${STR1} ${STR2}
+else
+    echo "Number of streams has to be 1 or 2, given ${N_STREAMS}"
+    exit 1
+fi

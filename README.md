@@ -392,4 +392,7 @@ To test that the stream is a valid AVFoundation stream, just open the stream url
 * x264opts:
 
 ### TO DO
-* Move files to ram disk to save SD card life: https://www.raspberrypi.org/forums/viewtopic.php?t=226425
+* Change install paths to [standard paths](http://www.pathname.com/fhs/pub/fhs-2.3.html). 
+ * The binaries should be in `/usr/bin/`
+ * The json config files should be in `/usr/local/etc/`
+ * The other config files should be placed automatically instead of needing `sudo cp`.

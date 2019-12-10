@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/bin/bash
 
 #Make output folder & remove old files
 #Cleanup or create WWW_DIR folder
@@ -17,4 +17,10 @@ cp html/index.html @WWW_DIR@/html/
 mkdir @WWW_DIR@/hls/
 
 #start streaming
-ffmpeg -f @MUXER@ -s @DEFAULT_FULL_RESOLUTION@ -r 30 -i @INPUT_DEVICE@ -f hls -hls_time 0.3 -hls_allow_cache 0 -hls_flags temp_file+delete_segments+independent_segments -hls_delete_threshold 1 -hls_list_size 60 -c:v libx264 -b:v 7000k -maxrate 10000k -crf 18 -flags +cgop+low_delay+qscale -r 15 -g 15 -refs 1 -strict normal -level 4.2 -profile:v high -preset ultrafast -tune zerolatency -pix_fmt yuv420p -vf "[in]drawtext=text='time=%{localtime}':box=1:x=(w-tw)/2:y=2*lh, drawtext=text='frame=%{n}, ts=%{pts\:hms}':box=1:x=(w-tw)/2:y=(3*lh)" @WWW_DIR@/hls/stream_hr.m3u8
+ffmpeg -f @MUXER@ -s @DEFAULT_FULL_RESOLUTION@ -r 30 -i @INPUT_DEVICE@ \
+    -f hls -hls_time 0.3 -hls_allow_cache 0 -hls_flags temp_file+delete_segments+independent_segments \
+        -hls_delete_threshold 1 -hls_list_size 60 -c:v libx264 -b:v 7000k -maxrate 10000k \
+            -crf 18 -flags +cgop+low_delay+qscale -r 15 -g 15 -refs 1 -strict normal \
+                -level 4.2 -profile:v high -preset ultrafast -tune zerolatency -pix_fmt yuv420p \
+                    -vf "[in]drawtext=text='time=%{localtime}':box=1:x=(w-tw)/2:y=2*lh, drawtext=text='frame=%{n}, ts=%{pts\:hms}':box=1:x=(w-tw)/2:y=(3*lh)" \
+                        @WWW_DIR@/hls/stream_hr.m3u8

@@ -23,7 +23,7 @@ CONFIG=Debug
 BUILD_DIR='build'
 DO_BUILD=no
 
-while getopts ":hxbc:i:" opt; do
+while getopts ":hxbc:w:i:" opt; do
     case ${opt} in
         h )
             usage
@@ -93,7 +93,7 @@ if [ ${DO_BUILD} == yes ]; then
     case "$CONFIG" in
         Release|Debug )
             echo "Building & installing binaries..."
-            cmake --build "$TARGET_DIR" --config $CONFIG -j4 --target install
+            cmake --build "$TARGET_DIR" --config $CONFIG -j 4 --target install
             ;;
         * )
             echo "Unknown build configuration: $CONFIG" 1>&2

@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/bin/bash
 set -e
 echo "web folder is @WWW_DIR@"
 #launch nginx server

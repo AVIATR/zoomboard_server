@@ -8,23 +8,6 @@ function USAGE {
     echo " Either hr or lr must be specified (or both)"
 }
 
-function INIT {
-    #Cleanup or create WWW_DIR folder
-    if [[ -e "@WWW_DIR@" ]]; then
-        read -p "@WWW_DIR@ exists, and will be removed. Are you sure (y/n)? " CHOICE
-        echo    #move to a new line
-        if [[ $CHOICE =~ ^[Yy]$ ]]; then
-            rm -rf "@WWW_DIR@"
-        else
-            echo "Exiting without starting stream."
-            exit 0
-        fi
-    fi
-    mkdir -p @WWW_DIR@/html
-    cp html/index.html @WWW_DIR@/html/
-    mkdir @WWW_DIR@/hls/
-}
-
 while getopts ":h" opt; do
     case ${opt} in
         h ) # process option h
@@ -65,4 +48,20 @@ do
             ;;
     esac
 done
+
+#Cleanup or create @WWW_DIR@ folder
+if [[ -e "@WWW_DIR@" ]]; then
+    read -p "@WWW_DIR@ exists, and will be removed. Are you sure (y/n)? " CHOICE
+    echo    #move to a new line
+    if [[ $CHOICE =~ ^[Yy]$ ]]; then
+        rm -rf "@WWW_DIR@"
+    else
+        echo "Exiting without starting stream."
+        exit 0
+    fi
+fi
+mkdir -p @WWW_DIR@/html
+cp html/index.html @WWW_DIR@/html/
+mkdir @WWW_DIR@/hls/
+
 eval $CMD ${ARGS[@]} 

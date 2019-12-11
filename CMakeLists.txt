@@ -109,6 +109,7 @@ elseif (${CMAKE_SYSTEM_NAME} STREQUAL "Linux") #RaspberryPi - assume default cam
     set(MUXER "v4l2")
     set(DEFAULT_FULL_RESOLUTION "1920x1080")
     set(CMAKE_CXX_FLAGS "-Wl,-latomic") #workaround an issue with opencv on rpi - https://github.com/opencv/opencv/issues/15278
+    set(INPUT_CODEC "mjpeg")
     configure_file(
         "stream.supervisor.conf.in"
         "stream.supervisor.conf"

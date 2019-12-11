@@ -9,7 +9,7 @@ autorestart=true
 user=pi
 
 [program:nginx]
-command=/usr/local/nginx/sbin/nginx
+command=/usr/local/nginx/sbin/nginx -g "daemon off;"
 process_name=%(program_name)s
 numprocs=1
 autostart=true

@@ -31,17 +31,18 @@ then
 fi
 
 CMD=ffmpeg
-ARGS=(-f @MUXER@ -s @DEFAULT_FULL_RESOLUTION@ -framerate 30) #-threads 2
-if [ -n "@INPUT_CODEC@" ]
-then
-    ARGS+=(-c:v @INPUT_CODEC@)
-fi
+ARGS=(-f @MUXER@ -s @DEFAULT_FULL_RESOLUTION@ -framerate 30 -threads 2)
+#if [ -n "@INPUT_CODEC@" ]
+#then
+#    ARGS+=(-c:v @INPUT_CODEC@)
+#fi
+
 ARGS+=(-i @INPUT_DEVICE@)
 for var in "$@"
 do
     case ${var} in
         hr ) #add hi-res low-frame-rate stream
-            ARGS+=(-f hls -hls_time 0.35 -hls_allow_cache 0 -hls_flags temp_file+delete_segments+independent_segments -hls_delete_threshold 1 -hls_list_size 6 -c:v libx264 -b:v 7000k -maxrate 10000k -bufsize 10000k -crf 18 -flags +cgop+low_delay+qscale -r 3 -g 3 -refs 1 -strict normal -level 4.2 -profile:v high -preset ultrafast -tune zerolatency -pix_fmt yuv420p @WWW_DIR@/hls/stream_hr.m3u8)
+            ARGS+=(-f hls -hls_time 1.0 -hls_allow_cache 0 -hls_flags temp_file+delete_segments+independent_segments -hls_delete_threshold 1 -hls_list_size 10 -c:v libx264 -b:v 7000k -maxrate 10000k -bufsize 10000k -crf 18 -flags +cgop+low_delay+qscale -r 5 -g 5 -refs 1 -strict normal -level 4.2 -profile:v high -preset ultrafast -tune zerolatency -pix_fmt yuv420p @WWW_DIR@/hls/stream_hr.m3u8)
             ;;
         lr ) #add lo-res hi-frame-rate stream
             ARGS+=(-f hls -hls_time 0.2 -hls_allow_cache 0 -hls_flags temp_file+delete_segments+independent_segments -hls_delete_threshold 1 -hls_list_size 10 -c:v libx264 -s 384x216 -b:v 2000k -maxrate 5000k -bufsize 4000k -crf 18 -flags +cgop+low_delay+qscale -r 20 -g 20 -refs 1 -strict normal -level 4.2 -profile:v high -preset ultrafast -tune zerolatency -pix_fmt yuv420p @WWW_DIR@/hls/stream_lr.m3u8)

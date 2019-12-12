@@ -1,6 +1,6 @@
 # The minimal Supervisord configuration for running the live stream.
 [program:serve]
-command=@CMAKE_INSTALL_PREFIX@/stream.sh lr hr
+command=@CMAKE_INSTALL_PREFIX@/stream.sh hr
 process_name=%(program_name)s
 numprocs=1
 directory=@CMAKE_INSTALL_PREFIX@

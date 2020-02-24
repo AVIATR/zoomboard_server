@@ -1,11 +1,12 @@
 # Zoomboard Raspberry-Pi Server
-This builds the executable to create an HLS stream to be used by the server for the zoomboard project. It opens the default camera (or a file if one is provided), displays it on a window to allow the user to choose the four corners to be rectified, applies a perspective transform to rectify the image and then creates an HLS stream to serve.
+This builds the executable to create an HLS stream to be used by the server for the zoomboard project. It opens the default camera (or a file if one is provided), and then creates an HLS stream to serve. If a marker configuration file is provided, then it also tries to detect aruco markers, which should be placed on the four corners of the board, and if all markers are found, uses them to calculate and apply a perspective transform to rectify the image so that the board is presented straight on in the stream.
 
 ## Dependencies
 This project depends on a few external open-source libraries:
 * [OpenCV](https://opencv.org/): for computer-vision related things and graphical interface. OpenCV is used for obtaining the corners of the board and undoing the perspective transformation
-* [LibAV](https://www.libav.org/): These are used for opening the input stream and transcoding the video stream to the output formats.
+* [ffmpeg](https://ffmpeg.org/): These are used for opening the input stream and transcoding the video stream to the output formats.
 * [log4cxx](https://logging.apache.org/log4cxx/latest_stable/): Used for logging across threads
+* [boost] boost libraries are only used for filesystem access using C++14. If you are using a C++17 compatible compiler, you do not need the boost libraries as C++17 provides the same filesystem facilities and those will be used instead.
 
 ### Installing dependencies on MacOS:
 To install the dependencies on MacOS using homebrew, just do
@@ -19,7 +20,7 @@ To install the dependencies on Raspbian:
   
 Unfortunately, the version of OpenCV that is in the repos does not come with Aruco. It is recommended that OpenCV be built from scratch. To do this, refer to the instructions [here](https://www.learnopencv.com/install-opencv-4-on-raspberry-pi/).
 
-## Building zoomboard\_server
+## Building the binariesr
 To build and install the code, use the `build_project.sh` script. The usage is
 
     ./build_project.sh [-c config] [-i install_dir] [-w www_dir] [-b] build_dir
@@ -29,8 +30,9 @@ where `config` is either `Release` or `Debug`. `install_dir` is the folder where
 ### Configuration files
 This json files provide the necessary configuration options (input device, resolution, frame rate, other ffmpeg options). as well as the output url and options. For details about the input device options, see the [ffmpeg faq about capture devices](https://trac.ffmpeg.org/wiki/Capture/Webcam).
 
-##Running zoomboard\_server
-All necessary files will be placed in the above defined `install_dir`
+## Running zoomboard\_server
+All necessary files will be placed in the above defined `install_dir`.
+
 ### Calibration
 The system is set up initially by creating the markers, using the `create_markers` executable. To run, simply use
 
@@ -49,30 +51,26 @@ The zoomboard server can be started via
     
 where the `<input>` and `<output>` can be media files or preferably .json files that have information re: input/output parameters to use if non-default values are to be used. To see how these files are set up, look at the example `input.json` and `output.json` files. Alternatively, you can use the `stream.sh` script to start and ffmpeg-based stream.
 
-The nginx server can be started using
+The nginx server can be started using the script in the installation folder, assuming you have Docker installed.
 
     ./launch_nginx_server.sh
 
 where `stream_folder` is the folder where the server is putting the stream files. The streams can then be played via ffplay:
 
-    ffplay http://127.0.0.1:8080/hls/stream_lr.m3u8
+    ffplay http://localhost:8080/hls/stream_lr.m3u8
 
-To play the hi-res stream, replace the URL above with `http://127.0.0.1:8080/hls/stream_hr.m3u8`
+To play the hi-res stream, replace the URL above with `http://localhost:8080/hls/stream_hr.m3u8`
 
 
 ## References
-### LibAV Reading/Writing Process
-An overview of the LibAV read/write process can be found in the documentation.
-* *Decoding Process:* An overview is found [here](https://ffmpeg.org/doxygen/2.8/group__lavf__decoding.html)
-* *Encoding Process:* An overview is found [here](https://ffmpeg.org/doxygen/2.8/group__lavf__encoding.html) and [here](https://ffmpeg.org/doxygen/2.8/group__libavf.html)
 
 ### X264 Settings
-We are using libx264 for encoding. The presets and how they correspond to various codec parameters can be found [here](http://dev.beandog.org/x264_preset_reference.html). If you have the `x264` binary installed, you can also see the installed presets by `x264 --fullhelp`. Some more information about the tuning and presets is given [here](https://trac.ffmpeg.org/wiki/Encode/H.264).
+We are using libx264 for encoding an h264-format stream. The presets and how they correspond to various codec parameters can be found [here](http://dev.beandog.org/x264_preset_reference.html). If you have the `x264` binary installed, you can also see the installed presets by `x264 --fullhelp`. Some more information about the tuning and presets is given [here](https://trac.ffmpeg.org/wiki/Encode/H.264).
 
 Specific parameters can also be found for ffmpeg [here](https://ffmpeg.org/ffmpeg-codecs.html#libx264_002c-libx264rgb), and some more details about the parameters is also given [here](https://sites.google.com/site/linuxencoding/x264-ffmpeg-mapping)
 
 
-### Further reading about libav and transcoding:
+### Further reading about ffmpeg and transcoding:
 Here are some useful links that were very helpful during the development of this software:
 * https://stackoverflow.com/a/40278283
 * https://ffmpeg.org/ffmpeg-formats.html#hls-2
@@ -105,7 +103,7 @@ where `<stream.m3u8>` should be replaced with the location and actual filename o
 
 To test that the stream is a valid AVFoundation stream, just open the stream url with Safari, the default player will play the stream if it is valid, as per the specifications [here](https://developer.apple.com/documentation/http_live_streaming/hls_authoring_specification_for_apple_devices#//apple_ref/doc/uid/TP40016596-CH2-SW1).
 
-### Discovered demuxer and decoder options using intergrated camera & avfoundation:
+### Discovered demuxer and decoder options using integrated camera & avfoundation:
 #### Demuxer options
 * avioflags:0x00000000
 * probesize:5000000

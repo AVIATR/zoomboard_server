@@ -42,7 +42,7 @@ for var in "$@"
 do
     case ${var} in
         hr ) #add hi-res low-frame-rate stream
-            ARGS+=(-f hls -hls_time 1.0 -hls_allow_cache 0 -hls_flags temp_file+delete_segments+independent_segments -hls_delete_threshold 1 -hls_list_size 10 -c:v libx264 -b:v 7000k -maxrate 10000k -bufsize 10000k -crf 18 -flags +cgop+low_delay+qscale -r 5 -g 5 -refs 1 -strict normal -level 4.2 -profile:v high -preset ultrafast -tune zerolatency -pix_fmt yuv420p @WWW_DIR@/hls/stream_hr.m3u8)
+            ARGS+=(-f hls -hls_time 0.2 -hls_allow_cache 0 -hls_flags temp_file+delete_segments+independent_segments -hls_delete_threshold 1 -hls_list_size 10 -c:v libx264 -b:v 5000k -maxrate 5000k -bufsize 3000k -crf 18 -flags +cgop+low_delay+qscale -r 5 -g 5 -refs 1 -strict normal -level 4.2 -profile:v high -preset ultrafast -tune zerolatency -pix_fmt yuv420p @WWW_DIR@/hls/stream_hr.m3u8)
             ;;
         lr ) #add lo-res hi-frame-rate stream
             ARGS+=(-f hls -hls_time 0.2 -hls_allow_cache 0 -hls_flags temp_file+delete_segments+independent_segments -hls_delete_threshold 1 -hls_list_size 10 -c:v libx264 -s 384x216 -b:v 2000k -maxrate 5000k -bufsize 4000k -crf 18 -flags +cgop+low_delay+qscale -r 20 -g 20 -refs 1 -strict normal -level 4.2 -profile:v high -preset ultrafast -tune zerolatency -pix_fmt yuv420p @WWW_DIR@/hls/stream_lr.m3u8)
@@ -70,7 +70,10 @@ if [[ -e "@WWW_DIR@" ]]; then
     fi
 fi
 mkdir -p @WWW_DIR@/html
-cp html/index.html @WWW_DIR@/html/
-mkdir @WWW_DIR@/hls/
+INDEX_FILE="html/index.html"
+if [ -f "$INDEX_FILE" ]; then
+    cp "$INDEX_FILE" @WWW_DIR@/html/
+fi
+mkdir -p @WWW_DIR@/hls/
 
 eval $CMD ${ARGS[@]} 
